@@ -1,5 +1,29 @@
-# Build
-build/
-bin/
+# Arquivos de Build e Executáveis
+*.exe
 *.o
-*.exe   
+*.obj
+*.dll
+*.a
+*.lib
+*.so
+*.dylib
+*.out
+
+# Pasta de saída dos executáveis (Output)
+src/output/
+bin/
+build/
+
+# VS Code (configurações locais e de ambiente)
+.vscode/
+!.vscode/tasks.json.example
+*.code-workspace
+
+# Cache do depurador e ferramentas de desenvolvimento
+.vs/
+*.dSYM/
+
+# Arquivos temporários do SO
+Thumbs.db
+Desktop.ini
+.DS_Store
