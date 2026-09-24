@@ -27,6 +27,8 @@ typedef struct MemoryBlock
     int gridX, gridY; // posição da grid (de acordo com os levels)
     Vector2 pixelPosition;
 
+    float radius;
+
     const char *blockValue;
 } MemoryBlock;
 
@@ -56,9 +58,9 @@ typedef struct Level
     int levelNumber;
     const char *levelName;
     float timeLimit; // tempo limite
-    
+
     int tileMap[MAP_ROWS][MAP_COLS]; // matriz de tiles do mapa
-    
+
     MemoryBlock memoryBlock;
     MemorySlot memorySlot;
 
@@ -67,11 +69,14 @@ typedef struct Level
     Vector2 spawnMemorySlot;
 } Level;
 
-void LoadLevel(Level *lvl,
-               int map[MAP_ROWS][MAP_COLS],
-               char *map_name,
-               int levelNumber,
-               Player *p)
+void LoadLevel(
+    Level *lvl,
+    int map[MAP_ROWS][MAP_COLS],
+    char *map_name,
+    int levelNumber,
+    Player *p,
+    MemoryBlock *m
+)
 {
     lvl->levelNumber = levelNumber;
     lvl->levelName = map_name;
@@ -97,8 +102,8 @@ void LoadLevel(Level *lvl,
             {
                 lvl->spawnMemoryBlock = (Vector2){
                     x + TILE_SIZE / 2,
-                    y + TILE_SIZE / 2
-                };
+                    y + TILE_SIZE / 2};
+                m->pixelPosition = lvl->spawnMemoryBlock;
             }
         }
     }
@@ -117,13 +122,12 @@ void DrawLevel(Level *lvl)
             switch (lvl->tileMap[linha][coluna])
             {
             case TILE_FLOOR:
-                DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, GRAY);
+                DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, (Color){46, 70, 89, 255});
                 break;
             case TILE_WALL:
                 DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, BLACK);
                 break;
             case TILE_SPAWN_PLAYER:
-                // lvl->spawnPlayer = (Vector2){x, y};
                 DrawRectangle(
                     x, y,
                     TILE_SIZE, TILE_SIZE,
@@ -133,15 +137,13 @@ void DrawLevel(Level *lvl)
                 DrawRectangle(
                     x, y,
                     TILE_SIZE, TILE_SIZE,
-                    GREEN
-                );
+                    GREEN);
                 break;
             case TILE_SLOT_RAM:
                 DrawRectangle(
                     x, y,
                     TILE_SIZE, TILE_SIZE,
-                    PURPLE
-                );
+                    PURPLE);
                 break;
             default:
                 DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, GOLD);
@@ -151,7 +153,8 @@ void DrawLevel(Level *lvl)
             DrawRectangleLines(
                 x, y,
                 TILE_SIZE, TILE_SIZE,
-                BLACK);
+                BLACK
+            );
         }
     }
 }
@@ -192,11 +195,47 @@ void UpdatePlayer(Player *p)
         p->playerPosition.x += direction.x * p->speed * GetFrameTime();
         p->playerPosition.y += direction.y * p->speed * GetFrameTime();
     }
+
+}
+
+void ManageBlock(Player *p, MemoryBlock *block)
+{
+    if (IsKeyDown(KEY_SPACE))
+    {
+        if (block->isCarried)
+        {
+            float distance = Vector2Distance(p->playerPosition, block->pixelPosition);
+
+            if (distance <= p->radius + block->radius)
+            {
+                block->isCarried = true;
+                block->pixelPosition.x = p->playerPosition.x;
+                block->pixelPosition.y = p->playerPosition.y + 50;
+            }
+        }
+        else
+        {
+            if (block->isCarried)
+            {
+                block->isCarried = false;
+
+                block->pixelPosition.x = p->playerPosition.x;
+                block->pixelPosition.y = p->playerPosition.y;
+
+                return;
+            }
+        }
+    }
 }
 
 void DrawPlayer(const Player *p)
 {
     DrawCircle(p->playerPosition.x, p->playerPosition.y, p->radius, RED);
+}
+
+void DrawMemBlock(const MemoryBlock *m)
+{
+    DrawCircle(m->pixelPosition.x, m->pixelPosition.y, m->radius, (Color){161, 21, 168, 255});
 }
 
 int main()
@@ -207,6 +246,8 @@ int main()
     // DECLARAÇÃO DE VARIÁVEIS
     Player player = {0};
     Level level = {0};
+    MemoryBlock mem_block = {0};
+    MemorySlot mem_slot = {0};
 
     // MAPA
     int mapa1[MAP_ROWS][MAP_COLS] = {
@@ -230,12 +271,13 @@ int main()
         {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}};
     // INICIALIZAÇÃO DE VARIÁVEIS
     InitPlayer(&player, (Vector2){0, 0});
-    LoadLevel(&level, mapa1, "Fase 1", 1, &player);
+    LoadLevel(&level, mapa1, "Fase 1", 1, &player, &mem_block);
 
     while (!WindowShouldClose())
     {
         // ATUALIZAÇÕES DO JOGO
         UpdatePlayer(&player);
+        ManageBlock(&player, &mem_block);
 
         // RENDERIZAÇÃO DO JOGO
         BeginDrawing();
@@ -244,6 +286,7 @@ int main()
         // FUNÇÕES DRAW
         DrawLevel(&level);
         DrawPlayer(&player);
+        DrawMemBlock(&mem_block);
         // INTERFACE
         DrawText(level.levelName, 0, 0, 20, RED);
 
