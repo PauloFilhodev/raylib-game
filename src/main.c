@@ -1,5 +1,6 @@
 #include "raylib.h"
 #include "raymath.h"
+#include <stddef.h>
 
 #define WINDOW_WIDTH 1280
 #define WINDOW_HEIGHT 720
@@ -11,14 +12,6 @@
 #define MAX_MEM_BLOCKS 10
 #define MAX_SLOT_BLOCKS 10
 
-// VARIAVEIS DO PLAYER
-typedef struct Player
-{
-    Vector2 playerPosition;
-    float speed;
-    float radius;
-} Player;
-
 // VARIAVEIS DO BLOCO DE MEMORIA
 typedef struct MemoryBlock
 {
@@ -28,12 +21,12 @@ typedef struct MemoryBlock
     Rectangle hitbox;
 
     int gridX, gridY; // posição da grid (de acordo com os levels)
-    Vector2 pixelPosition;
-    Vector2 spawnPosition;
+    Vector2 pixelPosition, spawnPosition;
 
-    float radius;
+    float radius;     // temporario
+    Color blockColor; // temporario
 
-    const char *blockValue;
+    int blockValue;
 } MemoryBlock;
 
 typedef struct MemorySlot
@@ -41,10 +34,12 @@ typedef struct MemorySlot
     bool isFilled;
 
     Rectangle hitbox;
-    int gridX, gridY;      // posição da grid (de acordo com os levels)
-    Vector2 pixelPosition; // posição em pixeis no mapa
+    int gridX, gridY;                     // posição da grid (de acordo com os levels)
+    Vector2 pixelPosition, spawnPosition; // posição em pixeis no mapa
 
-    const char *slotValue;
+    Color slotColor; // temp
+
+    int slotValue;
 } MemorySlot;
 
 typedef enum
@@ -60,10 +55,10 @@ typedef enum
 typedef struct Level
 {
     int levelNumber;
-    int blockCount, blocksPlaced;
+    int blockCount, blockSlots;
     const char *levelName;
     float timeLimit; // tempo limite
-    
+
     int tileMap[MAP_ROWS][MAP_COLS]; // matriz de tiles do mapa
 
     MemoryBlock memoryBlock[MAX_MEM_BLOCKS];
@@ -74,13 +69,23 @@ typedef struct Level
     Vector2 spawnMemorySlot;
 } Level;
 
+// VARIAVEIS DO PLAYER
+typedef struct Player
+{
+    Vector2 playerPosition;
+    float speed;
+    float radius;
+
+    // Referente ao que ele segura
+    bool isHoldingBlock;
+    MemoryBlock *carryingBlock;
+} Player;
+
 void LoadLevel(
     Level *lvl,
-    // int map[MAP_ROWS][MAP_COLS],
     char *map_name,
     int levelNumber,
-    Player *p,
-    MemoryBlock *m)
+    Player *p)
 {
     lvl->levelNumber = levelNumber;
     lvl->levelName = map_name;
@@ -92,8 +97,6 @@ void LoadLevel(
             int x = coluna * TILE_SIZE;
             int y = linha * TILE_SIZE;
 
-            // lvl->tileMap[linha][coluna] = map[linha][coluna];
-
             if (lvl->tileMap[linha][coluna] == TILE_SPAWN_PLAYER)
             {
                 lvl->spawnPlayer = (Vector2){
@@ -102,15 +105,29 @@ void LoadLevel(
 
                 p->playerPosition = lvl->spawnPlayer;
             }
-            if (lvl->tileMap[linha][coluna] == TILE_SPAWN_BLOCK)
-            {
-                lvl->spawnMemoryBlock = (Vector2){
-                    x + TILE_SIZE / 2,
-                    y + TILE_SIZE / 2};
-                m->pixelPosition = lvl->spawnMemoryBlock;
-            }
         }
     }
+
+    // SLOTS
+            for (int i = 0; i < lvl->blockSlots; i++)
+            {
+                MemorySlot *s = &lvl->memorySlot[i];
+
+                int posX = s->gridX * TILE_SIZE;
+                int posY = s->gridY * TILE_SIZE;
+
+                s->pixelPosition = (Vector2){posX, posY};
+            }
+            // BLOCOS DE MEMÓRIA
+            for (int i = 0; i < lvl->blockCount; i++)
+            {
+                MemoryBlock *m = &lvl->memoryBlock[i];
+
+                int posX = m->gridX * TILE_SIZE + (TILE_SIZE / 2.0f);
+                int posY = m->gridY * TILE_SIZE + (TILE_SIZE / 2.0f);
+
+                m->pixelPosition = (Vector2){posX, posY};
+            }
 }
 // ---------------------------------------------------------------------------------------------
 
@@ -122,12 +139,6 @@ void InitPlayer(Player *p, Vector2 position)
     p->speed = 200.0f;
 }
 
-// void InitMemoryBlock(MemoryBlock *b, Vector2 position)
-// {
-//     b->isCarried = false;
-//     b->pixelPosition = position;
-//     b->radius = 10.0f;
-// }
 // ---------------------------------------------------------------------------------------------
 
 // FUNÇÕES DE ATUALIZAÇÃO
@@ -161,34 +172,38 @@ void UpdatePlayer(Player *p)
     }
 }
 
-void ManageBlock(Player *p, MemoryBlock *block)
+void PickUpOrReleaseBlock(Player *p, Level *lvl)
 {
     if (IsKeyPressed(KEY_SPACE))
     {
-        if (!block->isCarried)
+        if (p->isHoldingBlock)
         {
-            float distance = Vector2Distance(p->playerPosition, block->pixelPosition);
-
-            if (distance <= p->radius + block->radius)
-            {
-                block->isCarried = true;
-            }
+            p->carryingBlock->pixelPosition.x = p->playerPosition.x;
+            p->carryingBlock->pixelPosition.y = p->playerPosition.y;
+            p->carryingBlock = NULL;
+            p->isHoldingBlock = false;
         }
         else
         {
-            block->isCarried = false;
+            for (int i = 0; i < lvl->blockCount; i++)
+            {
+                float distance = Vector2Distance(p->playerPosition, lvl->memoryBlock[i].pixelPosition);
 
-            block->pixelPosition.x = p->playerPosition.x;
-            block->pixelPosition.y = p->playerPosition.y;
-
-            return;
+                if (distance <= p->radius + lvl->memoryBlock[i].radius)
+                {
+                    p->carryingBlock = &lvl->memoryBlock[i];
+                    p->carryingBlock->isCarried = true;
+                    p->isHoldingBlock = true;
+                    break;
+                }
+            }
         }
     }
 
-    if (block->isCarried)
+    if (p->isHoldingBlock)
     {
-        block->pixelPosition.x = p->playerPosition.x;
-        block->pixelPosition.y = p->playerPosition.y - 15;
+        p->carryingBlock->pixelPosition.x = p->playerPosition.x;
+        p->carryingBlock->pixelPosition.y = p->playerPosition.y - 15.0f;
     }
 }
 // ---------------------------------------------------------------------------------------------
@@ -199,11 +214,21 @@ void DrawPlayer(const Player *p)
     DrawCircle(p->playerPosition.x, p->playerPosition.y, p->radius, RED);
 }
 
-void DrawMemBlock(const MemoryBlock *m, Level *lvl)
+void DrawMemBlock(Level *lvl)
 {
     for (int i = 0; i < lvl->blockCount; i++)
     {
-        DrawCircle(m->pixelPosition.x, m->pixelPosition.y, m->radius, (Color){168, 194, 12, 255});
+        MemoryBlock *m = &lvl->memoryBlock[i];
+        DrawCircle(m->pixelPosition.x, m->pixelPosition.y, m->radius, m->blockColor);
+    }
+}
+
+void DrawMemSlot(Level *lvl)
+{
+    for (int i = 0; i < lvl->blockSlots; i++)
+    {
+        MemorySlot *s = &lvl->memorySlot[i];
+        DrawRectangle(s->pixelPosition.x, s->pixelPosition.y, TILE_SIZE, TILE_SIZE, s->slotColor);
     }
 }
 // ---------------------------------------------------------------------------------------------
@@ -267,59 +292,50 @@ int main()
     Level level0 = {
         .levelNumber = 1,
         .blockCount = 3,
+        .blockSlots = 3,
         .levelName = "Fase 1 - Tutorial",
         .timeLimit = 60.0f,
         .tileMap = {
-        {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
-        {1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 1},
-        {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+            {1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 1},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
         .memoryBlock = {
-            {
-                .gridX = 25,
-                .gridY = 20,
-            },
-            {
-                .gridX = 30,
-                .gridY = 20,
-            },
-            {
-                .gridX = 35,
-                .gridY = 20,
-            },
-        }
-    };
-    Level level1 = {0};
-    Level level2 = {0};
-    MemoryBlock mem_block = {0};
-    MemorySlot mem_slot = {0};
+            {.isPlaced = false, .isCarried = false, .gridX = 16, .gridY = 5, .blockValue = 1, .blockColor = PURPLE, .radius = 15.0f},
+            {.isPlaced = false, .isCarried = false, .gridX = 16, .gridY = 5, .blockValue = 2, .blockColor = RED, .radius = 25.0f},
+            {.isPlaced = false, .isCarried = false, .gridX = 16, .gridY = 5, .blockValue = 3, .blockColor = BLUE, .radius = 35.0f},
+        },
+        .memorySlot = {
+            {.gridX = 16, .gridY = 1, .isFilled = false, .slotValue = 1, .slotColor = BLUE}, 
+            {.gridX = 16, .gridY = 5, .isFilled = false, .slotValue = 2, .slotColor = BLUE}, 
+            {.gridX = 16, .gridY = 10, .isFilled = false, .slotValue = 3, .slotColor = BLUE}, 
+            // {.gridX = 30, .gridY = 10, .isFilled = false, .slotValue = 2, .slotColor = YELLOW},
+            // {.gridX = 35, .gridY = 10, .isFilled = false, .slotValue = 3, .slotColor = GREEN},
+        }};
 
-    // MAPA
-    // int mapa1
     // INICIALIZAÇÃO DE VARIÁVEIS
     InitPlayer(&player, (Vector2){0, 0});
-    InitMemoryBlock(&mem_block, (Vector2){0, 0});
-    LoadLevel(&level0, "Fase 1", 1, &player, &mem_block);
+    LoadLevel(&level0, "Fase 1", 1, &player);
 
     while (!WindowShouldClose())
     {
         // ATUALIZAÇÕES DO JOGO
         UpdatePlayer(&player);
-        ManageBlock(&player, &mem_block);
+        PickUpOrReleaseBlock(&player, &level0);
 
         // RENDERIZAÇÃO DO JOGO
         BeginDrawing();
@@ -327,11 +343,12 @@ int main()
         ClearBackground(RAYWHITE);
         // FUNÇÕES DRAW
         DrawLevel(&level0);
+        DrawMemSlot(&level0);
+        DrawMemBlock(&level0);
         DrawPlayer(&player);
-        DrawMemBlock(&mem_block);
         // INTERFACE
         DrawText(level0.levelName, 0, 0, 20, RED);
-        if (mem_block.isCarried)
+        if (player.isHoldingBlock)
         {
             DrawText("Block is being carried", 0, 20, 20, RED);
         }
