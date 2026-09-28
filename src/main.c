@@ -8,6 +8,9 @@
 #define MAP_COLS 32
 #define TILE_SIZE 40 // Tamanho de cada bloco na tela em pixels (20x32 = 640px / 15x32 = 480px)
 
+#define MAX_MEM_BLOCKS 10
+#define MAX_SLOT_BLOCKS 10
+
 // VARIAVEIS DO PLAYER
 typedef struct Player
 {
@@ -26,6 +29,7 @@ typedef struct MemoryBlock
 
     int gridX, gridY; // posição da grid (de acordo com os levels)
     Vector2 pixelPosition;
+    Vector2 spawnPosition;
 
     float radius;
 
@@ -56,13 +60,14 @@ typedef enum
 typedef struct Level
 {
     int levelNumber;
+    int blockCount, blocksPlaced;
     const char *levelName;
     float timeLimit; // tempo limite
-
+    
     int tileMap[MAP_ROWS][MAP_COLS]; // matriz de tiles do mapa
 
-    MemoryBlock memoryBlock;
-    MemorySlot memorySlot;
+    MemoryBlock memoryBlock[MAX_MEM_BLOCKS];
+    MemorySlot memorySlot[MAX_SLOT_BLOCKS];
 
     Vector2 spawnPlayer;
     Vector2 spawnMemoryBlock;
@@ -71,12 +76,11 @@ typedef struct Level
 
 void LoadLevel(
     Level *lvl,
-    int map[MAP_ROWS][MAP_COLS],
+    // int map[MAP_ROWS][MAP_COLS],
     char *map_name,
     int levelNumber,
     Player *p,
-    MemoryBlock *m
-)
+    MemoryBlock *m)
 {
     lvl->levelNumber = levelNumber;
     lvl->levelName = map_name;
@@ -88,7 +92,7 @@ void LoadLevel(
             int x = coluna * TILE_SIZE;
             int y = linha * TILE_SIZE;
 
-            lvl->tileMap[linha][coluna] = map[linha][coluna];
+            // lvl->tileMap[linha][coluna] = map[linha][coluna];
 
             if (lvl->tileMap[linha][coluna] == TILE_SPAWN_PLAYER)
             {
@@ -108,6 +112,101 @@ void LoadLevel(
         }
     }
 }
+// ---------------------------------------------------------------------------------------------
+
+// FUNÇÕES DE INICIO
+void InitPlayer(Player *p, Vector2 position)
+{
+    p->playerPosition = position;
+    p->radius = 15.0f;
+    p->speed = 200.0f;
+}
+
+// void InitMemoryBlock(MemoryBlock *b, Vector2 position)
+// {
+//     b->isCarried = false;
+//     b->pixelPosition = position;
+//     b->radius = 10.0f;
+// }
+// ---------------------------------------------------------------------------------------------
+
+// FUNÇÕES DE ATUALIZAÇÃO
+void UpdatePlayer(Player *p)
+{
+    Vector2 direction = {0.0f, 0.0f};
+
+    if (IsKeyDown(KEY_W))
+    {
+        direction.y -= 1.0f;
+    }
+    if (IsKeyDown(KEY_S))
+    {
+        direction.y += 1.0f;
+    }
+    if (IsKeyDown(KEY_D))
+    {
+        direction.x += 1.0f;
+    }
+    if (IsKeyDown(KEY_A))
+    {
+        direction.x -= 1.0f;
+    }
+
+    if (Vector2Length(direction) > 0.0f)
+    {
+        direction = Vector2Normalize(direction);
+
+        p->playerPosition.x += direction.x * p->speed * GetFrameTime();
+        p->playerPosition.y += direction.y * p->speed * GetFrameTime();
+    }
+}
+
+void ManageBlock(Player *p, MemoryBlock *block)
+{
+    if (IsKeyPressed(KEY_SPACE))
+    {
+        if (!block->isCarried)
+        {
+            float distance = Vector2Distance(p->playerPosition, block->pixelPosition);
+
+            if (distance <= p->radius + block->radius)
+            {
+                block->isCarried = true;
+            }
+        }
+        else
+        {
+            block->isCarried = false;
+
+            block->pixelPosition.x = p->playerPosition.x;
+            block->pixelPosition.y = p->playerPosition.y;
+
+            return;
+        }
+    }
+
+    if (block->isCarried)
+    {
+        block->pixelPosition.x = p->playerPosition.x;
+        block->pixelPosition.y = p->playerPosition.y - 15;
+    }
+}
+// ---------------------------------------------------------------------------------------------
+
+// FUNÇÕES DRAW
+void DrawPlayer(const Player *p)
+{
+    DrawCircle(p->playerPosition.x, p->playerPosition.y, p->radius, RED);
+}
+
+void DrawMemBlock(const MemoryBlock *m, Level *lvl)
+{
+    for (int i = 0; i < lvl->blockCount; i++)
+    {
+        DrawCircle(m->pixelPosition.x, m->pixelPosition.y, m->radius, (Color){168, 194, 12, 255});
+    }
+}
+// ---------------------------------------------------------------------------------------------
 
 void DrawLevel(Level *lvl)
 {
@@ -153,89 +252,9 @@ void DrawLevel(Level *lvl)
             DrawRectangleLines(
                 x, y,
                 TILE_SIZE, TILE_SIZE,
-                BLACK
-            );
+                BLACK);
         }
     }
-}
-
-// FUNÇÕES DO PLAYER
-void InitPlayer(Player *p, Vector2 posicao)
-{
-    p->playerPosition = posicao;
-    p->radius = 15.0f;
-    p->speed = 200.0f;
-}
-
-void UpdatePlayer(Player *p)
-{
-    Vector2 direction = {0.0f, 0.0f};
-
-    if (IsKeyDown(KEY_W))
-    {
-        direction.y -= 1.0f;
-    }
-    if (IsKeyDown(KEY_S))
-    {
-        direction.y += 1.0f;
-    }
-    if (IsKeyDown(KEY_D))
-    {
-        direction.x += 1.0f;
-    }
-    if (IsKeyDown(KEY_A))
-    {
-        direction.x -= 1.0f;
-    }
-
-    if (Vector2Length(direction) > 0.0f)
-    {
-        direction = Vector2Normalize(direction);
-
-        p->playerPosition.x += direction.x * p->speed * GetFrameTime();
-        p->playerPosition.y += direction.y * p->speed * GetFrameTime();
-    }
-
-}
-
-void ManageBlock(Player *p, MemoryBlock *block)
-{
-    if (IsKeyDown(KEY_SPACE))
-    {
-        if (block->isCarried)
-        {
-            float distance = Vector2Distance(p->playerPosition, block->pixelPosition);
-
-            if (distance <= p->radius + block->radius)
-            {
-                block->isCarried = true;
-                block->pixelPosition.x = p->playerPosition.x;
-                block->pixelPosition.y = p->playerPosition.y + 50;
-            }
-        }
-        else
-        {
-            if (block->isCarried)
-            {
-                block->isCarried = false;
-
-                block->pixelPosition.x = p->playerPosition.x;
-                block->pixelPosition.y = p->playerPosition.y;
-
-                return;
-            }
-        }
-    }
-}
-
-void DrawPlayer(const Player *p)
-{
-    DrawCircle(p->playerPosition.x, p->playerPosition.y, p->radius, RED);
-}
-
-void DrawMemBlock(const MemoryBlock *m)
-{
-    DrawCircle(m->pixelPosition.x, m->pixelPosition.y, m->radius, (Color){161, 21, 168, 255});
 }
 
 int main()
@@ -245,12 +264,12 @@ int main()
 
     // DECLARAÇÃO DE VARIÁVEIS
     Player player = {0};
-    Level level = {0};
-    MemoryBlock mem_block = {0};
-    MemorySlot mem_slot = {0};
-
-    // MAPA
-    int mapa1[MAP_ROWS][MAP_COLS] = {
+    Level level0 = {
+        .levelNumber = 1,
+        .blockCount = 3,
+        .levelName = "Fase 1 - Tutorial",
+        .timeLimit = 60.0f,
+        .tileMap = {
         {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
         {1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
         {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
@@ -268,10 +287,33 @@ int main()
         {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
         {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
         {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 1},
-        {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}};
+        {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
+        .memoryBlock = {
+            {
+                .gridX = 25,
+                .gridY = 20,
+            },
+            {
+                .gridX = 30,
+                .gridY = 20,
+            },
+            {
+                .gridX = 35,
+                .gridY = 20,
+            },
+        }
+    };
+    Level level1 = {0};
+    Level level2 = {0};
+    MemoryBlock mem_block = {0};
+    MemorySlot mem_slot = {0};
+
+    // MAPA
+    // int mapa1
     // INICIALIZAÇÃO DE VARIÁVEIS
     InitPlayer(&player, (Vector2){0, 0});
-    LoadLevel(&level, mapa1, "Fase 1", 1, &player, &mem_block);
+    InitMemoryBlock(&mem_block, (Vector2){0, 0});
+    LoadLevel(&level0, "Fase 1", 1, &player, &mem_block);
 
     while (!WindowShouldClose())
     {
@@ -284,11 +326,19 @@ int main()
 
         ClearBackground(RAYWHITE);
         // FUNÇÕES DRAW
-        DrawLevel(&level);
+        DrawLevel(&level0);
         DrawPlayer(&player);
         DrawMemBlock(&mem_block);
         // INTERFACE
-        DrawText(level.levelName, 0, 0, 20, RED);
+        DrawText(level0.levelName, 0, 0, 20, RED);
+        if (mem_block.isCarried)
+        {
+            DrawText("Block is being carried", 0, 20, 20, RED);
+        }
+        else
+        {
+            DrawText("Block is not being carried", 0, 20, 20, RED);
+        }
 
         EndDrawing();
     }
