@@ -109,25 +109,25 @@ void LoadLevel(
     }
 
     // SLOTS
-            for (int i = 0; i < lvl->blockSlots; i++)
-            {
-                MemorySlot *s = &lvl->memorySlot[i];
+    for (int i = 0; i < lvl->blockSlots; i++)
+    {
+        MemorySlot *s = &lvl->memorySlot[i];
 
-                int posX = s->gridX * TILE_SIZE;
-                int posY = s->gridY * TILE_SIZE;
+        int posX = s->gridX * TILE_SIZE;
+        int posY = s->gridY * TILE_SIZE;
 
-                s->pixelPosition = (Vector2){posX, posY};
-            }
-            // BLOCOS DE MEMÓRIA
-            for (int i = 0; i < lvl->blockCount; i++)
-            {
-                MemoryBlock *m = &lvl->memoryBlock[i];
+        s->pixelPosition = (Vector2){posX, posY};
+    }
+    // BLOCOS DE MEMÓRIA
+    for (int i = 0; i < lvl->blockCount; i++)
+    {
+        MemoryBlock *m = &lvl->memoryBlock[i];
 
-                int posX = m->gridX * TILE_SIZE + (TILE_SIZE / 2.0f);
-                int posY = m->gridY * TILE_SIZE + (TILE_SIZE / 2.0f);
+        int posX = m->gridX * TILE_SIZE + (TILE_SIZE / 2.0f);
+        int posY = m->gridY * TILE_SIZE + (TILE_SIZE / 2.0f);
 
-                m->pixelPosition = (Vector2){posX, posY};
-            }
+        m->pixelPosition = (Vector2){posX, posY};
+    }
 }
 // ---------------------------------------------------------------------------------------------
 
@@ -172,14 +172,63 @@ void UpdatePlayer(Player *p)
     }
 }
 
+void UpdateMemorySlot(Level *lvl, Player *p)
+{
+    for (int i = 0; i < lvl->blockSlots; i++)
+    {
+        MemorySlot *slot = &lvl->memorySlot[i];
+
+        if (slot->isFilled &&
+            Vector2Distance(p->carryingBlock->pixelPosition,
+                            slot->pixelPosition) < 1.0f)
+        {
+            slot->isFilled = false;
+            break;
+        }
+    }
+}
+
+void FitMemoryBlock(MemoryBlock *block, Level *lvl)
+{
+    for (int i = 0; i < lvl->blockSlots; i++)
+    {
+        MemorySlot *slot = &lvl->memorySlot[i];
+
+        if (slot->isFilled)
+            continue;
+
+        Vector2 slotCenter = {
+            slot->pixelPosition.x + TILE_SIZE / 2.0f,
+            slot->pixelPosition.y + TILE_SIZE / 2.0f};
+
+        float distance = Vector2Distance(
+            block->pixelPosition,
+            slotCenter);
+
+        if (distance <= TILE_SIZE)
+        {
+            block->pixelPosition = slotCenter;
+            block->isPlaced = true;
+            slot->isFilled = true;
+
+            return;
+        }
+    }
+}
+
 void PickUpOrReleaseBlock(Player *p, Level *lvl)
 {
     if (IsKeyPressed(KEY_SPACE))
     {
         if (p->isHoldingBlock)
         {
-            p->carryingBlock->pixelPosition.x = p->playerPosition.x;
-            p->carryingBlock->pixelPosition.y = p->playerPosition.y;
+            MemoryBlock *block = p->carryingBlock;
+
+            block->pixelPosition = p->playerPosition;
+            block->isCarried = false;
+
+            FitMemoryBlock(block, lvl);
+
             p->carryingBlock = NULL;
             p->isHoldingBlock = false;
         }
@@ -188,10 +237,25 @@ void PickUpOrReleaseBlock(Player *p, Level *lvl)
             for (int i = 0; i < lvl->blockCount; i++)
             {
                 float distance = Vector2Distance(p->playerPosition, lvl->memoryBlock[i].pixelPosition);
-
+                
                 if (distance <= p->radius + lvl->memoryBlock[i].radius)
                 {
                     p->carryingBlock = &lvl->memoryBlock[i];
+                    for (int i = 0; i < lvl->blockSlots; i++)
+                    {
+                        MemorySlot *slot = &lvl->memorySlot[i];
+
+                        Vector2 slotCenter = {
+                            slot->pixelPosition.x + TILE_SIZE / 2.0f,
+                            slot->pixelPosition.y + TILE_SIZE / 2.0f};
+
+                        if (slot->isFilled &&
+                            Vector2Distance(p->carryingBlock->pixelPosition, slotCenter) < 1.0f)
+                        {
+                            slot->isFilled = false;
+                            break;
+                        }
+                    }
                     p->carryingBlock->isCarried = true;
                     p->isHoldingBlock = true;
                     break;
@@ -206,6 +270,7 @@ void PickUpOrReleaseBlock(Player *p, Level *lvl)
         p->carryingBlock->pixelPosition.y = p->playerPosition.y - 15.0f;
     }
 }
+
 // ---------------------------------------------------------------------------------------------
 
 // FUNÇÕES DRAW
@@ -228,6 +293,7 @@ void DrawMemSlot(Level *lvl)
     for (int i = 0; i < lvl->blockSlots; i++)
     {
         MemorySlot *s = &lvl->memorySlot[i];
+        DrawText(TextFormat("%d", s->isFilled), s->pixelPosition.x, s->pixelPosition.y - 10.0f, 20, BLACK);
         DrawRectangle(s->pixelPosition.x, s->pixelPosition.y, TILE_SIZE, TILE_SIZE, s->slotColor);
     }
 }
@@ -315,14 +381,14 @@ int main()
             {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 1},
             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
         .memoryBlock = {
-            {.isPlaced = false, .isCarried = false, .gridX = 16, .gridY = 5, .blockValue = 1, .blockColor = PURPLE, .radius = 15.0f},
-            {.isPlaced = false, .isCarried = false, .gridX = 16, .gridY = 5, .blockValue = 2, .blockColor = RED, .radius = 25.0f},
-            {.isPlaced = false, .isCarried = false, .gridX = 16, .gridY = 5, .blockValue = 3, .blockColor = BLUE, .radius = 35.0f},
+            {.isPlaced = false, .isCarried = false, .gridX = 18, .gridY = 5, .blockValue = 1, .blockColor = PURPLE, .radius = 15.0f},
+            {.isPlaced = false, .isCarried = false, .gridX = 18, .gridY = 5, .blockValue = 2, .blockColor = RED, .radius = 25.0f},
+            {.isPlaced = false, .isCarried = false, .gridX = 18, .gridY = 5, .blockValue = 3, .blockColor = BLUE, .radius = 35.0f},
         },
         .memorySlot = {
-            {.gridX = 16, .gridY = 1, .isFilled = false, .slotValue = 1, .slotColor = BLUE}, 
-            {.gridX = 16, .gridY = 5, .isFilled = false, .slotValue = 2, .slotColor = BLUE}, 
-            {.gridX = 16, .gridY = 10, .isFilled = false, .slotValue = 3, .slotColor = BLUE}, 
+            {.gridX = 16, .gridY = 1, .isFilled = false, .slotValue = 1, .slotColor = BLUE},
+            {.gridX = 16, .gridY = 5, .isFilled = false, .slotValue = 2, .slotColor = YELLOW},
+            {.gridX = 16, .gridY = 10, .isFilled = false, .slotValue = 3, .slotColor = GREEN},
             // {.gridX = 30, .gridY = 10, .isFilled = false, .slotValue = 2, .slotColor = YELLOW},
             // {.gridX = 35, .gridY = 10, .isFilled = false, .slotValue = 3, .slotColor = GREEN},
         }};
