@@ -55,7 +55,7 @@ typedef enum
 typedef struct Level
 {
     int levelNumber;
-    int blockCount, blockSlots;
+    int blockCount, slotCount;
     const char *levelName;
     float timeLimit; // tempo limite
 
@@ -109,7 +109,7 @@ void LoadLevel(
     }
 
     // SLOTS
-    for (int i = 0; i < lvl->blockSlots; i++)
+    for (int i = 0; i < lvl->slotCount; i++)
     {
         MemorySlot *s = &lvl->memorySlot[i];
 
@@ -174,7 +174,7 @@ void UpdatePlayer(Player *p)
 
 void UpdateMemorySlot(Level *lvl, Player *p)
 {
-    for (int i = 0; i < lvl->blockSlots; i++)
+    for (int i = 0; i < lvl->slotCount; i++)
     {
         MemorySlot *slot = &lvl->memorySlot[i];
 
@@ -190,7 +190,7 @@ void UpdateMemorySlot(Level *lvl, Player *p)
 
 void FitMemoryBlock(MemoryBlock *block, Level *lvl)
 {
-    for (int i = 0; i < lvl->blockSlots; i++)
+    for (int i = 0; i < lvl->slotCount; i++)
     {
         MemorySlot *slot = &lvl->memorySlot[i];
 
@@ -241,7 +241,7 @@ void PickUpOrReleaseBlock(Player *p, Level *lvl)
                 if (distance <= p->radius + lvl->memoryBlock[i].radius)
                 {
                     p->carryingBlock = &lvl->memoryBlock[i];
-                    for (int i = 0; i < lvl->blockSlots; i++)
+                    for (int i = 0; i < lvl->slotCount; i++)
                     {
                         MemorySlot *slot = &lvl->memorySlot[i];
 
@@ -285,12 +285,13 @@ void DrawMemBlock(Level *lvl)
     {
         MemoryBlock *m = &lvl->memoryBlock[i];
         DrawCircle(m->pixelPosition.x, m->pixelPosition.y, m->radius, m->blockColor);
+        DrawCircleSector(m->pixelPosition, m->radius - 1.0f, 0.0f, 360.0f, 1, BLACK);
     }
 }
 
 void DrawMemSlot(Level *lvl)
 {
-    for (int i = 0; i < lvl->blockSlots; i++)
+    for (int i = 0; i < lvl->slotCount; i++)
     {
         MemorySlot *s = &lvl->memorySlot[i];
         DrawText(TextFormat("%d", s->isFilled), s->pixelPosition.x, s->pixelPosition.y - 10.0f, 20, BLACK);
@@ -323,18 +324,18 @@ void DrawLevel(Level *lvl)
                     TILE_SIZE, TILE_SIZE,
                     GRAY);
                 break;
-            case TILE_SPAWN_BLOCK:
-                DrawRectangle(
-                    x, y,
-                    TILE_SIZE, TILE_SIZE,
-                    GREEN);
-                break;
-            case TILE_SLOT_RAM:
-                DrawRectangle(
-                    x, y,
-                    TILE_SIZE, TILE_SIZE,
-                    PURPLE);
-                break;
+            // case TILE_SPAWN_BLOCK:
+            //     DrawRectangle(
+            //         x, y,
+            //         TILE_SIZE, TILE_SIZE,
+            //         GREEN);
+            //     break;
+            // case TILE_SLOT_RAM:
+            //     DrawRectangle(
+            //         x, y,
+            //         TILE_SIZE, TILE_SIZE,
+            //         PURPLE);
+            //     break;
             default:
                 DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, GOLD);
                 break;
@@ -358,14 +359,14 @@ int main()
     Level level0 = {
         .levelNumber = 1,
         .blockCount = 3,
-        .blockSlots = 3,
+        .slotCount = 3,
         .levelName = "Fase 1 - Tutorial",
         .timeLimit = 60.0f,
         .tileMap = {
             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
-            {1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
             {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
             {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
             {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
@@ -378,19 +379,17 @@ int main()
             {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
             {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
             {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
         .memoryBlock = {
-            {.isPlaced = false, .isCarried = false, .gridX = 18, .gridY = 5, .blockValue = 1, .blockColor = PURPLE, .radius = 15.0f},
-            {.isPlaced = false, .isCarried = false, .gridX = 18, .gridY = 5, .blockValue = 2, .blockColor = RED, .radius = 25.0f},
-            {.isPlaced = false, .isCarried = false, .gridX = 18, .gridY = 5, .blockValue = 3, .blockColor = BLUE, .radius = 35.0f},
+            {.isPlaced = false, .isCarried = false, .gridX = 18, .gridY = 5, .blockValue = 1, .blockColor = BLUE, .radius = 15.0f},
+            {.isPlaced = false, .isCarried = false, .gridX = 18, .gridY = 6, .blockValue = 2, .blockColor = YELLOW, .radius = 15.0f},
+            {.isPlaced = false, .isCarried = false, .gridX = 18, .gridY = 7, .blockValue = 3, .blockColor = GREEN, .radius = 15.0f},
         },
         .memorySlot = {
-            {.gridX = 16, .gridY = 1, .isFilled = false, .slotValue = 1, .slotColor = BLUE},
-            {.gridX = 16, .gridY = 5, .isFilled = false, .slotValue = 2, .slotColor = YELLOW},
-            {.gridX = 16, .gridY = 10, .isFilled = false, .slotValue = 3, .slotColor = GREEN},
-            // {.gridX = 30, .gridY = 10, .isFilled = false, .slotValue = 2, .slotColor = YELLOW},
-            // {.gridX = 35, .gridY = 10, .isFilled = false, .slotValue = 3, .slotColor = GREEN},
+            {.gridX = 10, .gridY = 2, .isFilled = false, .slotValue = 1, .slotColor = BLUE},
+            {.gridX = 10, .gridY = 8, .isFilled = false, .slotValue = 2, .slotColor = YELLOW},
+            {.gridX = 10, .gridY = 16, .isFilled = false, .slotValue = 3, .slotColor = GREEN},
         }};
 
     // INICIALIZAÇÃO DE VARIÁVEIS
