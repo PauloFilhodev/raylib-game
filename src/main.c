@@ -1,6 +1,7 @@
 #include "raylib.h"
 #include "raymath.h"
-#include "stdbool.h"
+#include <math.h>
+#include <stdbool.h>
 #include <stddef.h>
 
 #define WINDOW_WIDTH 1280
@@ -8,7 +9,7 @@
 
 #define MAP_ROWS 18
 #define MAP_COLS 32
-#define TILE_SIZE 40 // Tamanho de cada bloco na tela em pixels (20x32 = 640px / 15x32 = 480px)
+#define TILE_SIZE 40 // Tamanho de cada bloco na tela em pixels
 
 #define MAX_MEM_BLOCKS 10
 #define MAX_SLOT_BLOCKS 10
@@ -19,7 +20,7 @@ typedef struct MemoryBlock
     bool isCarried;
     bool isPlaced;
 
-    Rectangle hitbox;
+    Rectangle hitbox; // ainda não usado
 
     int gridX, gridY; // posição da grid (de acordo com os levels)
     Vector2 pixelPosition, spawnPosition;
@@ -34,9 +35,9 @@ typedef struct MemorySlot
 {
     bool isFilled;
 
-    Rectangle hitbox;
-    int gridX, gridY;                     // posição da grid (de acordo com os levels)
-    Vector2 pixelPosition, spawnPosition; // posição em pixeis no mapa
+    Rectangle hitbox; // retângulo do tile do slot (preenchido no LoadLevel)
+    int gridX, gridY; // posição da grid (de acordo com os levels)
+    Vector2 pixelPosition, spawnPosition; // canto superior esquerdo do slot, em pixels
 
     Color slotColor; // temp
 
@@ -82,11 +83,29 @@ typedef struct Player
     MemoryBlock *carryingBlock;
 } Player;
 
-void LoadLevel(
-    Level *lvl,
-    char *map_name,
-    int levelNumber,
-    Player *p)
+// ---------------------------------------------------------------------------------------------
+// AUXILIARES
+
+static Vector2 SlotCenter(const MemorySlot *slot)
+{
+    return (Vector2){
+        slot->pixelPosition.x + TILE_SIZE / 2.0f,
+        slot->pixelPosition.y + TILE_SIZE / 2.0f};
+}
+
+// Fora do mapa conta como parede
+static bool IsWallTile(const Level *lvl, int row, int col)
+{
+    if (row < 0 || row >= MAP_ROWS || col < 0 || col >= MAP_COLS)
+        return true;
+
+    return lvl->tileMap[row][col] == TILE_WALL;
+}
+
+// ---------------------------------------------------------------------------------------------
+// CARREGAMENTO DO LEVEL
+
+void LoadLevel(Level *lvl, const char *map_name, int levelNumber, Player *p)
 {
     lvl->levelNumber = levelNumber;
     lvl->levelName = map_name;
@@ -114,168 +133,170 @@ void LoadLevel(
     {
         MemorySlot *s = &lvl->memorySlot[i];
 
-        int posX = s->gridX * TILE_SIZE;
-        int posY = s->gridY * TILE_SIZE;
-
-        s->pixelPosition = (Vector2){posX, posY};
+        s->pixelPosition = (Vector2){s->gridX * TILE_SIZE, s->gridY * TILE_SIZE};
+        s->spawnPosition = s->pixelPosition;
+        s->hitbox = (Rectangle){s->pixelPosition.x, s->pixelPosition.y, TILE_SIZE, TILE_SIZE};
     }
+
     // BLOCOS DE MEMÓRIA
     for (int i = 0; i < lvl->blockCount; i++)
     {
         MemoryBlock *m = &lvl->memoryBlock[i];
 
-        int posX = m->gridX * TILE_SIZE + (TILE_SIZE / 2.0f);
-        int posY = m->gridY * TILE_SIZE + (TILE_SIZE / 2.0f);
-
-        m->pixelPosition = (Vector2){posX, posY};
+        m->pixelPosition = (Vector2){
+            m->gridX * TILE_SIZE + (TILE_SIZE / 2.0f),
+            m->gridY * TILE_SIZE + (TILE_SIZE / 2.0f)};
+        m->spawnPosition = m->pixelPosition;
     }
 }
 
-bool CheckWallCollisions(Player *p, Level *lvl, Vector2 nextPosition)
+// ---------------------------------------------------------------------------------------------
+// COLISÃO COM PAREDES (resolução por empurrão)
+//
+// Em vez de rejeitar o movimento quando há colisão, o jogador se move livremente
+// e depois é empurrado para fora das paredes ao longo da normal do contato
+// (ponto mais próximo do retângulo ao centro do círculo). Isso dá deslizamento
+// suave nas paredes e nas quinas, sem "grudar".
+void ResolveWallCollisions(Player *p, const Level *lvl)
 {
-    float top = nextPosition.y - p->radius;
-    float bottom = nextPosition.y + p->radius;
-    float left = nextPosition.x - p->radius;
-    float right = nextPosition.x + p->radius;
-
-    int colStart = (int)floorf(left / TILE_SIZE);
-    int colEnd = (int)floorf(right / TILE_SIZE);
-    int rowStart = (int)floorf(top / TILE_SIZE);
-    int rowEnd = (int)floorf(bottom / TILE_SIZE);
-
-    for (int row = rowStart; row <= rowEnd; row++)
+    // Algumas passadas: empurrar para fora de uma parede pode jogar contra outra
+    for (int pass = 0; pass < 4; pass++)
     {
-        for (int col = colStart; col <= colEnd; col++)
+        Vector2 pos = p->playerPosition;
+
+        int colStart = (int)floorf((pos.x - p->radius) / TILE_SIZE);
+        int colEnd = (int)floorf((pos.x + p->radius) / TILE_SIZE);
+        int rowStart = (int)floorf((pos.y - p->radius) / TILE_SIZE);
+        int rowEnd = (int)floorf((pos.y + p->radius) / TILE_SIZE);
+
+        bool found = false;
+        float bestDist = p->radius;
+        Vector2 bestPush = {0.0f, 0.0f};
+
+        for (int row = rowStart; row <= rowEnd; row++)
         {
-            if (row < 0 || row >= MAP_ROWS ||
-                col < 0 || col >= MAP_COLS)
+            for (int col = colStart; col <= colEnd; col++)
             {
-                return true;
-            }
+                if (!IsWallTile(lvl, row, col))
+                    continue;
 
-            if (lvl->tileMap[row][col] == TILE_WALL)
-            {
-                Rectangle wall = {
-                    col * TILE_SIZE,
-                    row * TILE_SIZE,
-                    TILE_SIZE,
-                    TILE_SIZE
-                };
+                Rectangle wall = {col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE};
 
-                if (CheckCollisionCircleRec(
-                    nextPosition, p->radius, wall))
+                Vector2 closest = {
+                    Clamp(pos.x, wall.x, wall.x + wall.width),
+                    Clamp(pos.y, wall.y, wall.y + wall.height)};
+
+                Vector2 diff = Vector2Subtract(pos, closest);
+                float dist = Vector2Length(diff);
+
+                if (dist >= p->radius)
+                    continue;
+
+                Vector2 push;
+
+                if (dist > 0.0001f)
                 {
-                    return true;
+                    // Empurra ao longo da normal até o círculo só encostar
+                    push = Vector2Scale(diff, (p->radius - dist) / dist);
+                }
+                else
+                {
+                    // Centro dentro do tile: sai pela face mais próxima
+                    float dl = pos.x - wall.x;
+                    float dr = wall.x + wall.width - pos.x;
+                    float dt = pos.y - wall.y;
+                    float db = wall.y + wall.height - pos.y;
+                    float m = fminf(fminf(dl, dr), fminf(dt, db));
+
+                    if (m == dl)
+                        push = (Vector2){-(dl + p->radius), 0.0f};
+                    else if (m == dr)
+                        push = (Vector2){dr + p->radius, 0.0f};
+                    else if (m == dt)
+                        push = (Vector2){0.0f, -(dt + p->radius)};
+                    else
+                        push = (Vector2){0.0f, db + p->radius};
+                }
+
+                // Resolve só a penetração mais profunda por passada.
+                // Evita "colisões fantasma" na junção entre dois tiles alinhados.
+                if (!found || dist < bestDist)
+                {
+                    found = true;
+                    bestDist = dist;
+                    bestPush = push;
                 }
             }
         }
-    }
 
-    return false;
-}
-
-void MovePlayerAxis(Player *p, Level *lvl, float amount, bool horizontal)
-{
-    float stepSize = 1.0f;
-    int steps = (int)ceilf(fabsf(amount) / stepSize);
-
-    if (steps == 0) return;
-
-    float step = amount / steps;
-
-    for (int i = 0; i < steps; i++)
-    {
-        Vector2 nextPosition = p->playerPosition;
-
-        if (horizontal)
-            nextPosition.x += step;
-        else
-            nextPosition.y += step;
-
-        if (CheckWallCollisions(p, lvl, nextPosition))
+        if (!found)
             break;
 
-        p->playerPosition = nextPosition;
+        p->playerPosition = Vector2Add(p->playerPosition, bestPush);
     }
 }
-// ---------------------------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------------------------
 // FUNÇÕES DE INICIO
 void InitPlayer(Player *p, Vector2 position)
 {
     p->playerPosition = position;
     p->radius = 15.0f;
     p->speed = 200.0f;
+    p->isHoldingBlock = false;
+    p->carryingBlock = NULL;
 }
 
 // ---------------------------------------------------------------------------------------------
-
 // FUNÇÕES DE ATUALIZAÇÃO
 void UpdatePlayer(Player *p, Level *lvl)
 {
     Vector2 direction = {0.0f, 0.0f};
-    Vector2 nextPosition = p->playerPosition;
 
     if (IsKeyDown(KEY_W))
-    {
         direction.y -= 1.0f;
-    }
     if (IsKeyDown(KEY_S))
-    {
         direction.y += 1.0f;
-    }
     if (IsKeyDown(KEY_D))
-    {
         direction.x += 1.0f;
-    }
     if (IsKeyDown(KEY_A))
-    {
         direction.x -= 1.0f;
-    }
 
     if (Vector2Length(direction) > 0.0f)
     {
         direction = Vector2Normalize(direction);
 
-        float deltaX = direction.x * p->speed * GetFrameTime();
-        float deltaY = direction.y * p->speed * GetFrameTime();
-        
-        // Movimento horizontal
-        nextPosition = p->playerPosition;
-        nextPosition.x += deltaX;
-
-        if (!CheckWallCollisions(p, lvl, nextPosition))
-        {
-            p->playerPosition.x = nextPosition.x;
-        }
-
-        // Movimento vertical
-        nextPosition = p->playerPosition;
-        nextPosition.y += deltaY;
-
-        if (!CheckWallCollisions(p, lvl, nextPosition))
-        {
-            p->playerPosition.y = nextPosition.y;
-        }
+        float dt = GetFrameTime();
+        p->playerPosition.x += direction.x * p->speed * dt;
+        p->playerPosition.y += direction.y * p->speed * dt;
     }
+
+    // Sempre resolve, mesmo parado (ex.: spawn encostado em parede)
+    ResolveWallCollisions(p, lvl);
 }
 
-void UpdateMemorySlot(Level *lvl, Player *p)
+// Libera o slot ocupado por um bloco (se ele estiver encaixado em algum)
+static void ReleaseSlotOfBlock(MemoryBlock *block, Level *lvl)
 {
+    if (!block->isPlaced)
+        return;
+
     for (int i = 0; i < lvl->blockSlots; i++)
     {
         MemorySlot *slot = &lvl->memorySlot[i];
 
         if (slot->isFilled &&
-            Vector2Distance(p->carryingBlock->pixelPosition,
-                            slot->pixelPosition) < 1.0f)
+            Vector2Distance(block->pixelPosition, SlotCenter(slot)) < 1.0f)
         {
             slot->isFilled = false;
             break;
         }
     }
+
+    block->isPlaced = false;
 }
 
+// Tenta encaixar o bloco em um slot livre próximo E com o mesmo valor
 void FitMemoryBlock(MemoryBlock *block, Level *lvl)
 {
     for (int i = 0; i < lvl->blockSlots; i++)
@@ -285,15 +306,12 @@ void FitMemoryBlock(MemoryBlock *block, Level *lvl)
         if (slot->isFilled)
             continue;
 
-        Vector2 slotCenter = {
-            slot->pixelPosition.x + TILE_SIZE / 2.0f,
-            slot->pixelPosition.y + TILE_SIZE / 2.0f};
+        if (slot->slotValue != block->blockValue)
+            continue;
 
-        float distance = Vector2Distance(
-            block->pixelPosition,
-            slotCenter);
+        Vector2 slotCenter = SlotCenter(slot);
 
-        if (distance <= TILE_SIZE)
+        if (Vector2Distance(block->pixelPosition, slotCenter) <= TILE_SIZE)
         {
             block->pixelPosition = slotCenter;
             block->isPlaced = true;
@@ -310,6 +328,7 @@ void PickUpOrReleaseBlock(Player *p, Level *lvl)
     {
         if (p->isHoldingBlock)
         {
+            // SOLTAR
             MemoryBlock *block = p->carryingBlock;
 
             block->pixelPosition = p->playerPosition;
@@ -322,32 +341,34 @@ void PickUpOrReleaseBlock(Player *p, Level *lvl)
         }
         else
         {
+            // PEGAR: escolhe o bloco mais próximo ao alcance
+            MemoryBlock *nearest = NULL;
+            float nearestDist = 0.0f;
+
             for (int i = 0; i < lvl->blockCount; i++)
             {
-                float distance = Vector2Distance(p->playerPosition, lvl->memoryBlock[i].pixelPosition);
+                MemoryBlock *b = &lvl->memoryBlock[i];
 
-                if (distance <= p->radius + lvl->memoryBlock[i].radius)
+                if (b->isCarried)
+                    continue;
+
+                float distance = Vector2Distance(p->playerPosition, b->pixelPosition);
+
+                if (distance <= p->radius + b->radius &&
+                    (nearest == NULL || distance < nearestDist))
                 {
-                    p->carryingBlock = &lvl->memoryBlock[i];
-                    for (int i = 0; i < lvl->blockSlots; i++)
-                    {
-                        MemorySlot *slot = &lvl->memorySlot[i];
-
-                        Vector2 slotCenter = {
-                            slot->pixelPosition.x + TILE_SIZE / 2.0f,
-                            slot->pixelPosition.y + TILE_SIZE / 2.0f};
-
-                        if (slot->isFilled &&
-                            Vector2Distance(p->carryingBlock->pixelPosition, slotCenter) < 1.0f)
-                        {
-                            slot->isFilled = false;
-                            break;
-                        }
-                    }
-                    p->carryingBlock->isCarried = true;
-                    p->isHoldingBlock = true;
-                    break;
+                    nearest = b;
+                    nearestDist = distance;
                 }
+            }
+
+            if (nearest != NULL)
+            {
+                ReleaseSlotOfBlock(nearest, lvl);
+
+                nearest->isCarried = true;
+                p->carryingBlock = nearest;
+                p->isHoldingBlock = true;
             }
         }
     }
@@ -360,40 +381,44 @@ void PickUpOrReleaseBlock(Player *p, Level *lvl)
 }
 
 // ---------------------------------------------------------------------------------------------
-
 // FUNÇÕES DRAW
 void DrawPlayer(const Player *p)
 {
-    DrawCircle(p->playerPosition.x, p->playerPosition.y, p->radius, RED);
+    DrawCircle((int)p->playerPosition.x, (int)p->playerPosition.y, p->radius, RED);
 }
 
-void DrawMemBlock(Level *lvl)
+void DrawMemBlock(const Level *lvl)
 {
     for (int i = 0; i < lvl->blockCount; i++)
     {
-        MemoryBlock *m = &lvl->memoryBlock[i];
-        DrawCircle(m->pixelPosition.x, m->pixelPosition.y, m->radius, m->blockColor);
+        const MemoryBlock *m = &lvl->memoryBlock[i];
+        DrawCircle((int)m->pixelPosition.x, (int)m->pixelPosition.y, m->radius, m->blockColor);
+        DrawCircleLines((int)m->pixelPosition.x, (int)m->pixelPosition.y, m->radius, BLACK);
     }
 }
 
-void DrawMemSlot(Level *lvl)
+void DrawMemSlot(const Level *lvl)
 {
     for (int i = 0; i < lvl->blockSlots; i++)
     {
-        MemorySlot *s = &lvl->memorySlot[i];
-        DrawText(TextFormat("%d", s->isFilled), s->pixelPosition.x, s->pixelPosition.y - 10.0f, 20, BLACK);
-        DrawRectangle(s->pixelPosition.x, s->pixelPosition.y, TILE_SIZE, TILE_SIZE, s->slotColor);
+        const MemorySlot *s = &lvl->memorySlot[i];
+        int x = (int)s->pixelPosition.x;
+        int y = (int)s->pixelPosition.y;
+
+        // Retângulo primeiro, texto depois (antes o texto ficava escondido)
+        DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, Fade(s->slotColor, 0.6f));
+        DrawRectangleLines(x, y, TILE_SIZE, TILE_SIZE, WHITE);
+        DrawText(TextFormat("%d", s->slotValue), x + 4, y + 2, 16, WHITE);
+        DrawText(TextFormat("%d", s->isFilled), x + 4, y - 18, 16, BLACK);
     }
 }
-// ---------------------------------------------------------------------------------------------
 
-void DrawLevel(Level *lvl)
+void DrawLevel(const Level *lvl)
 {
     for (int linha = 0; linha < MAP_ROWS; linha++)
     {
         for (int coluna = 0; coluna < MAP_COLS; coluna++)
         {
-            // COLUNAS E LINHAS CORRESPONDENTES NO MAPA
             int x = coluna * TILE_SIZE;
             int y = linha * TILE_SIZE;
 
@@ -406,37 +431,27 @@ void DrawLevel(Level *lvl)
                 DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, BLACK);
                 break;
             case TILE_SPAWN_PLAYER:
-                DrawRectangle(
-                    x, y,
-                    TILE_SIZE, TILE_SIZE,
-                    GRAY);
+                DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, GRAY);
                 break;
             case TILE_SPAWN_BLOCK:
-                DrawRectangle(
-                    x, y,
-                    TILE_SIZE, TILE_SIZE,
-                    GREEN);
+                DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, GREEN);
                 break;
             case TILE_SLOT_RAM:
-                DrawRectangle(
-                    x, y,
-                    TILE_SIZE, TILE_SIZE,
-                    PURPLE);
+                DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, PURPLE);
                 break;
             default:
                 DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, GOLD);
                 break;
             }
 
-            DrawRectangleLines(
-                x, y,
-                TILE_SIZE, TILE_SIZE,
-                BLACK);
+            DrawRectangleLines(x, y, TILE_SIZE, TILE_SIZE, BLACK);
         }
     }
 }
 
-int main()
+// ---------------------------------------------------------------------------------------------
+
+int main(void)
 {
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Byte Delivery");
     SetTargetFPS(60);
@@ -468,17 +483,17 @@ int main()
             {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1},
             {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 4, 1},
             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
+        // Blocos espalhados (antes os 3 nasciam empilhados no mesmo tile)
         .memoryBlock = {
             {.isPlaced = false, .isCarried = false, .gridX = 18, .gridY = 5, .blockValue = 1, .blockColor = PURPLE, .radius = 15.0f},
-            {.isPlaced = false, .isCarried = false, .gridX = 18, .gridY = 5, .blockValue = 2, .blockColor = RED, .radius = 25.0f},
-            {.isPlaced = false, .isCarried = false, .gridX = 18, .gridY = 5, .blockValue = 3, .blockColor = BLUE, .radius = 35.0f},
+            {.isPlaced = false, .isCarried = false, .gridX = 21, .gridY = 5, .blockValue = 2, .blockColor = RED, .radius = 25.0f},
+            {.isPlaced = false, .isCarried = false, .gridX = 25, .gridY = 5, .blockValue = 3, .blockColor = BLUE, .radius = 35.0f},
         },
+        // Cor de cada slot = cor do bloco com o mesmo valor
         .memorySlot = {
-            {.gridX = 16, .gridY = 1, .isFilled = false, .slotValue = 1, .slotColor = BLUE},
-            {.gridX = 16, .gridY = 5, .isFilled = false, .slotValue = 2, .slotColor = YELLOW},
-            {.gridX = 16, .gridY = 10, .isFilled = false, .slotValue = 3, .slotColor = GREEN},
-            // {.gridX = 30, .gridY = 10, .isFilled = false, .slotValue = 2, .slotColor = YELLOW},
-            // {.gridX = 35, .gridY = 10, .isFilled = false, .slotValue = 3, .slotColor = GREEN},
+            {.gridX = 16, .gridY = 1, .isFilled = false, .slotValue = 1, .slotColor = PURPLE},
+            {.gridX = 16, .gridY = 5, .isFilled = false, .slotValue = 2, .slotColor = RED},
+            {.gridX = 16, .gridY = 10, .isFilled = false, .slotValue = 3, .slotColor = BLUE},
         }};
 
     // INICIALIZAÇÃO DE VARIÁVEIS
