@@ -14,6 +14,8 @@
 #define MAX_MEM_BLOCKS 10
 #define MAX_SLOT_BLOCKS 10
 
+#define ENEMY_COUNT 6
+
 // VARIAVEIS DO BLOCO DE MEMORIA
 typedef struct MemoryBlock
 {
@@ -77,11 +79,25 @@ typedef struct Player
     Vector2 playerPosition;
     float speed;
     float radius;
+    float health;
+    float hitcooldown;
 
     // Referente ao que ele segura
     bool isHoldingBlock;
     MemoryBlock *carryingBlock;
 } Player;
+
+// VARIAVEIS DO INIMIGO
+typedef struct Enemy
+{
+    Vector2 enemyPosition;
+    float speed;
+    float radius;
+    float damage;
+
+    Rectangle area; // área onde o inimigo pode andar
+    Vector2 target; // ponto atual para onde ele está indo
+} Enemy;
 
 // ---------------------------------------------------------------------------------------------
 // AUXILIARES
@@ -100,6 +116,14 @@ static bool IsWallTile(const Level *lvl, int row, int col)
         return true;
 
     return lvl->tileMap[row][col] == TILE_WALL;
+}
+
+// Sorteia um ponto dentro da área do inimigo, respeitando o raio dele
+static Vector2 RandomPointInArea(const Enemy *e)
+{
+    return (Vector2){
+        GetRandomValue((int)(e->area.x + e->radius), (int)(e->area.x + e->area.width - e->radius)),
+        GetRandomValue((int)(e->area.y + e->radius), (int)(e->area.y + e->area.height - e->radius))};
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -236,6 +260,80 @@ void ResolveWallCollisions(Player *p, const Level *lvl)
     }
 }
 
+void ResolveWallCollisionsCircle(Vector2 *position, float radius, const Level *lvl)
+{
+    for (int pass = 0; pass < 4; pass++)
+    {
+        Vector2 pos = *position;
+
+        int colStart = (int)floorf((pos.x - radius) / TILE_SIZE);
+        int colEnd = (int)floorf((pos.x + radius) / TILE_SIZE);
+        int rowStart = (int)floorf((pos.y - radius) / TILE_SIZE);
+        int rowEnd = (int)floorf((pos.y + radius) / TILE_SIZE);
+
+        bool found = false;
+        float bestDist = radius;
+        Vector2 bestPush = {0.0f, 0.0f};
+
+        for (int row = rowStart; row <= rowEnd; row++)
+        {
+            for (int col = colStart; col <= colEnd; col++)
+            {
+                if (!IsWallTile(lvl, row, col))
+                    continue;
+
+                Rectangle wall = {col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE};
+
+                Vector2 closest = {
+                    Clamp(pos.x, wall.x, wall.x + wall.width),
+                    Clamp(pos.y, wall.y, wall.y + wall.height)};
+
+                Vector2 diff = Vector2Subtract(pos, closest);
+                float dist = Vector2Length(diff);
+
+                if (dist >= radius)
+                    continue;
+
+                Vector2 push;
+
+                if (dist > 0.0001f)
+                {
+                    push = Vector2Scale(diff, (radius - dist) / dist);
+                }
+                else
+                {
+                    float dl = pos.x - wall.x;
+                    float dr = wall.x + wall.width - pos.x;
+                    float dt = pos.y - wall.y;
+                    float db = wall.y + wall.height - pos.y;
+                    float m = fminf(fminf(dl, dr), fminf(dt, db));
+
+                    if (m == dl)
+                        push = (Vector2){-(dl + radius), 0.0f};
+                    else if (m == dr)
+                        push = (Vector2){dr + radius, 0.0f};
+                    else if (m == dt)
+                        push = (Vector2){0.0f, -(dt + radius)};
+                    else
+                        push = (Vector2){0.0f, db + radius};
+                }
+
+                if (!found || dist < bestDist)
+                {
+                    found = true;
+                    bestDist = dist;
+                    bestPush = push;
+                }
+            }
+        }
+
+        if (!found)
+            break;
+
+        *position = Vector2Add(*position, bestPush);
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // FUNÇÕES DE INICIO
 void InitPlayer(Player *p, Vector2 position)
@@ -243,8 +341,20 @@ void InitPlayer(Player *p, Vector2 position)
     p->playerPosition = position;
     p->radius = 15.0f;
     p->speed = 200.0f;
+    p->health = 100.0f;
+    p->hitcooldown = 0.0f;
     p->isHoldingBlock = false;
     p->carryingBlock = NULL;
+}
+
+void InitEnemy(Enemy *e, Vector2 position, Rectangle area)
+{
+    e->enemyPosition = position;
+    e->radius = 15.0f;
+    e->speed = 100.0f;
+    e->damage = 20.0f;
+    e->area = area;
+    e->target = RandomPointInArea(e);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -252,6 +362,10 @@ void InitPlayer(Player *p, Vector2 position)
 void UpdatePlayer(Player *p, Level *lvl)
 {
     Vector2 direction = {0.0f, 0.0f};
+
+    // Tempo de invulnerabilidade após levar dano
+    if (p->hitcooldown > 0.0f)
+        p->hitcooldown -= GetFrameTime();
 
     if (IsKeyDown(KEY_W))
         direction.y -= 1.0f;
@@ -273,6 +387,38 @@ void UpdatePlayer(Player *p, Level *lvl)
 
     // Sempre resolve, mesmo parado (ex.: spawn encostado em parede)
     ResolveWallCollisions(p, lvl);
+}
+
+void UpdateEnemy(Enemy *e, Player *p, const Level *lvl)
+{
+    float dt = GetFrameTime();
+
+    // PATRULHAR dentro da área
+    Vector2 direction = Vector2Subtract(e->target, e->enemyPosition);
+
+    if (Vector2Length(direction) < 5.0f)
+    {
+        e->target = RandomPointInArea(e); // chegou: escolhe novo ponto
+    }
+    else
+    {
+        direction = Vector2Normalize(direction);
+        e->enemyPosition.x += direction.x * e->speed * dt;
+        e->enemyPosition.y += direction.y * e->speed * dt;
+    }
+
+    ResolveWallCollisionsCircle(&e->enemyPosition, e->radius, lvl);
+
+    // ATACAR (dano por contato)
+    float distance = Vector2Distance(e->enemyPosition, p->playerPosition);
+
+    if (distance <= e->radius + p->radius && p->hitcooldown <= 0.0f)
+    {
+        p->health -= e->damage;
+        if (p->health < 0.0f)
+            p->health = 0.0f;
+        p->hitcooldown = 1.0f; // 1 segundo sem poder levar dano de novo
+    }
 }
 
 // Libera o slot ocupado por um bloco (se ele estiver encaixado em algum)
@@ -397,6 +543,12 @@ void DrawMemBlock(const Level *lvl)
     }
 }
 
+void DrawEnemy(const Enemy *e)
+{
+    DrawCircle((int)e->enemyPosition.x, (int)e->enemyPosition.y, e->radius, WHITE);
+    DrawCircleLines((int)e->enemyPosition.x, (int)e->enemyPosition.y, e->radius, BLACK);
+}
+
 void DrawMemSlot(const Level *lvl)
 {
     for (int i = 0; i < lvl->blockSlots; i++)
@@ -458,6 +610,7 @@ int main(void)
 
     // DECLARAÇÃO DE VARIÁVEIS
     Player player = {0};
+    Enemy enemies[ENEMY_COUNT] = {0};
     Level level0 = {
         .levelNumber = 1,
         .blockCount = 3,
@@ -498,6 +651,31 @@ int main(void)
 
     // INICIALIZAÇÃO DE VARIÁVEIS
     InitPlayer(&player, (Vector2){0, 0});
+    // Áreas dos inimigos (em pixels: x, y, largura, altura)
+    // Inimigo 0: colunas 22–29, linhas 1–4
+    InitEnemy(&enemies[0],
+              (Vector2){26 * TILE_SIZE, 3 * TILE_SIZE},
+              (Rectangle){22 * TILE_SIZE, 1 * TILE_SIZE, 8 * TILE_SIZE, 4 * TILE_SIZE});
+    // Inimigo 1: colunas 2–10, linhas 14–16
+    InitEnemy(&enemies[1],
+              (Vector2){6 * TILE_SIZE, 15 * TILE_SIZE},
+              (Rectangle){2 * TILE_SIZE, 14 * TILE_SIZE, 9 * TILE_SIZE, 3 * TILE_SIZE});
+    // Inimigo 2: colunas 20–29, linhas 6–9
+    InitEnemy(&enemies[2],
+              (Vector2){25 * TILE_SIZE, 8 * TILE_SIZE},
+              (Rectangle){20 * TILE_SIZE, 6 * TILE_SIZE, 10 * TILE_SIZE, 4 * TILE_SIZE});
+    // Inimigo 3: colunas 14–22, linhas 14–16
+    InitEnemy(&enemies[3],
+              (Vector2){18 * TILE_SIZE, 15 * TILE_SIZE},
+              (Rectangle){14 * TILE_SIZE, 14 * TILE_SIZE, 9 * TILE_SIZE, 3 * TILE_SIZE});
+    // Inimigo 4: colunas 1–8, linhas 4–10 
+    InitEnemy(&enemies[4],
+              (Vector2){5 * TILE_SIZE, 7 * TILE_SIZE},
+              (Rectangle){1 * TILE_SIZE, 4 * TILE_SIZE, 8 * TILE_SIZE, 7 * TILE_SIZE});
+    // Inimigo 5: colunas 10–20, linhas 1–5 
+    InitEnemy(&enemies[5],
+              (Vector2){15 * TILE_SIZE, 3 * TILE_SIZE},
+              (Rectangle){10 * TILE_SIZE, 1 * TILE_SIZE, 11 * TILE_SIZE, 5 * TILE_SIZE});
     LoadLevel(&level0, "Fase 1", 1, &player);
 
     while (!WindowShouldClose())
@@ -505,6 +683,8 @@ int main(void)
         // ATUALIZAÇÕES DO JOGO
         UpdatePlayer(&player, &level0);
         PickUpOrReleaseBlock(&player, &level0);
+        for (int i = 0; i < ENEMY_COUNT; i++)
+            UpdateEnemy(&enemies[i], &player, &level0);
 
         // RENDERIZAÇÃO DO JOGO
         BeginDrawing();
@@ -514,9 +694,12 @@ int main(void)
         DrawLevel(&level0);
         DrawMemSlot(&level0);
         DrawMemBlock(&level0);
+        for (int i = 0; i < ENEMY_COUNT; i++)
+            DrawEnemy(&enemies[i]);
         DrawPlayer(&player);
         // INTERFACE
         DrawText(level0.levelName, 0, 0, 20, RED);
+        DrawText(TextFormat("Health: %.0f", player.health), 0, 40, 20, RED);
         if (player.isHoldingBlock)
         {
             DrawText("Block is being carried", 0, 20, 20, RED);
