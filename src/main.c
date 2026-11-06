@@ -1,5 +1,6 @@
 #include "raylib.h"
 #include "raymath.h"
+#include "stdbool.h"
 #include <stddef.h>
 
 #define WINDOW_WIDTH 1280
@@ -129,6 +130,74 @@ void LoadLevel(
         m->pixelPosition = (Vector2){posX, posY};
     }
 }
+
+bool CheckWallCollisions(Player *p, Level *lvl, Vector2 nextPosition)
+{
+    float top = nextPosition.y - p->radius;
+    float bottom = nextPosition.y + p->radius;
+    float left = nextPosition.x - p->radius;
+    float right = nextPosition.x + p->radius;
+
+    int colStart = (int)floorf(left / TILE_SIZE);
+    int colEnd = (int)floorf(right / TILE_SIZE);
+    int rowStart = (int)floorf(top / TILE_SIZE);
+    int rowEnd = (int)floorf(bottom / TILE_SIZE);
+
+    for (int row = rowStart; row <= rowEnd; row++)
+    {
+        for (int col = colStart; col <= colEnd; col++)
+        {
+            if (row < 0 || row >= MAP_ROWS ||
+                col < 0 || col >= MAP_COLS)
+            {
+                return true;
+            }
+
+            if (lvl->tileMap[row][col] == TILE_WALL)
+            {
+                Rectangle wall = {
+                    col * TILE_SIZE,
+                    row * TILE_SIZE,
+                    TILE_SIZE,
+                    TILE_SIZE
+                };
+
+                if (CheckCollisionCircleRec(
+                    nextPosition, p->radius, wall))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+void MovePlayerAxis(Player *p, Level *lvl, float amount, bool horizontal)
+{
+    float stepSize = 1.0f;
+    int steps = (int)ceilf(fabsf(amount) / stepSize);
+
+    if (steps == 0) return;
+
+    float step = amount / steps;
+
+    for (int i = 0; i < steps; i++)
+    {
+        Vector2 nextPosition = p->playerPosition;
+
+        if (horizontal)
+            nextPosition.x += step;
+        else
+            nextPosition.y += step;
+
+        if (CheckWallCollisions(p, lvl, nextPosition))
+            break;
+
+        p->playerPosition = nextPosition;
+    }
+}
 // ---------------------------------------------------------------------------------------------
 
 // FUNÇÕES DE INICIO
@@ -142,9 +211,10 @@ void InitPlayer(Player *p, Vector2 position)
 // ---------------------------------------------------------------------------------------------
 
 // FUNÇÕES DE ATUALIZAÇÃO
-void UpdatePlayer(Player *p)
+void UpdatePlayer(Player *p, Level *lvl)
 {
     Vector2 direction = {0.0f, 0.0f};
+    Vector2 nextPosition = p->playerPosition;
 
     if (IsKeyDown(KEY_W))
     {
@@ -167,8 +237,26 @@ void UpdatePlayer(Player *p)
     {
         direction = Vector2Normalize(direction);
 
-        p->playerPosition.x += direction.x * p->speed * GetFrameTime();
-        p->playerPosition.y += direction.y * p->speed * GetFrameTime();
+        float deltaX = direction.x * p->speed * GetFrameTime();
+        float deltaY = direction.y * p->speed * GetFrameTime();
+        
+        // Movimento horizontal
+        nextPosition = p->playerPosition;
+        nextPosition.x += deltaX;
+
+        if (!CheckWallCollisions(p, lvl, nextPosition))
+        {
+            p->playerPosition.x = nextPosition.x;
+        }
+
+        // Movimento vertical
+        nextPosition = p->playerPosition;
+        nextPosition.y += deltaY;
+
+        if (!CheckWallCollisions(p, lvl, nextPosition))
+        {
+            p->playerPosition.y = nextPosition.y;
+        }
     }
 }
 
@@ -237,7 +325,7 @@ void PickUpOrReleaseBlock(Player *p, Level *lvl)
             for (int i = 0; i < lvl->blockCount; i++)
             {
                 float distance = Vector2Distance(p->playerPosition, lvl->memoryBlock[i].pixelPosition);
-                
+
                 if (distance <= p->radius + lvl->memoryBlock[i].radius)
                 {
                     p->carryingBlock = &lvl->memoryBlock[i];
@@ -368,17 +456,17 @@ int main()
             {1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
             {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
             {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1},
+            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 4, 1},
             {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
         .memoryBlock = {
             {.isPlaced = false, .isCarried = false, .gridX = 18, .gridY = 5, .blockValue = 1, .blockColor = PURPLE, .radius = 15.0f},
@@ -400,7 +488,7 @@ int main()
     while (!WindowShouldClose())
     {
         // ATUALIZAÇÕES DO JOGO
-        UpdatePlayer(&player);
+        UpdatePlayer(&player, &level0);
         PickUpOrReleaseBlock(&player, &level0);
 
         // RENDERIZAÇÃO DO JOGO
