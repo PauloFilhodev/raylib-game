@@ -1,105 +1,20 @@
 #include "raylib.h"
 #include "raymath.h"
+#include "game_types.h"
 #include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "player.c"
+
 #define WINDOW_WIDTH 1280
 #define WINDOW_HEIGHT 720
-
-#define MAP_ROWS 18
-#define MAP_COLS 32
-#define TILE_SIZE 40 // Tamanho de cada bloco na tela em pixels
-
-#define MAX_MEM_BLOCKS 10
-#define MAX_SLOT_BLOCKS 10
-
-// VARIAVEIS DO BLOCO DE MEMORIA
-typedef struct MemoryBlock
-{
-    bool isCarried;
-    bool isPlaced;
-
-    Rectangle hitbox; // ainda não usado
-
-    int gridX, gridY; // posição da grid (de acordo com os levels)
-    Vector2 pixelPosition, spawnPosition;
-
-    float radius;     // temporario
-    Color blockColor; // temporario
-
-    int blockValue;
-} MemoryBlock;
-
-typedef struct MemorySlot
-{
-    bool isFilled;
-
-    Rectangle hitbox; // retângulo do tile do slot (preenchido no LoadLevel)
-    int gridX, gridY; // posição da grid (de acordo com os levels)
-    Vector2 pixelPosition, spawnPosition; // canto superior esquerdo do slot, em pixels
-
-    Color slotColor; // temp
-
-    int slotValue;
-} MemorySlot;
-
-typedef enum
-{
-    TILE_FLOOR = 0,
-    TILE_WALL = 1,
-    TILE_SPAWN_PLAYER = 2,
-    TILE_SPAWN_BLOCK = 3,
-    TILE_SLOT_RAM = 4
-} TileType;
-
-// CONSTRUÇÃO DO LEVEL DO MAPA
-typedef struct Level
-{
-    int levelNumber;
-    int blockCount, blockSlots;
-    const char *levelName;
-    float timeLimit; // tempo limite
-
-    int tileMap[MAP_ROWS][MAP_COLS]; // matriz de tiles do mapa
-
-    MemoryBlock memoryBlock[MAX_MEM_BLOCKS];
-    MemorySlot memorySlot[MAX_SLOT_BLOCKS];
-
-    Vector2 spawnPlayer;
-    Vector2 spawnMemoryBlock;
-    Vector2 spawnMemorySlot;
-} Level;
-
-// VARIAVEIS DO PLAYER
-typedef struct Player
-{
-    Vector2 playerPosition;
-    float speed;
-    float radius;
-
-    // Referente ao que ele segura
-    bool isHoldingBlock;
-    MemoryBlock *carryingBlock;
-} Player;
-
-// ---------------------------------------------------------------------------------------------
-// AUXILIARES
 
 static Vector2 SlotCenter(const MemorySlot *slot)
 {
     return (Vector2){
         slot->pixelPosition.x + TILE_SIZE / 2.0f,
         slot->pixelPosition.y + TILE_SIZE / 2.0f};
-}
-
-// Fora do mapa conta como parede
-static bool IsWallTile(const Level *lvl, int row, int col)
-{
-    if (row < 0 || row >= MAP_ROWS || col < 0 || col >= MAP_COLS)
-        return true;
-
-    return lvl->tileMap[row][col] == TILE_WALL;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -148,131 +63,6 @@ void LoadLevel(Level *lvl, const char *map_name, int levelNumber, Player *p)
             m->gridY * TILE_SIZE + (TILE_SIZE / 2.0f)};
         m->spawnPosition = m->pixelPosition;
     }
-}
-
-// ---------------------------------------------------------------------------------------------
-// COLISÃO COM PAREDES (resolução por empurrão)
-//
-// Em vez de rejeitar o movimento quando há colisão, o jogador se move livremente
-// e depois é empurrado para fora das paredes ao longo da normal do contato
-// (ponto mais próximo do retângulo ao centro do círculo). Isso dá deslizamento
-// suave nas paredes e nas quinas, sem "grudar".
-void ResolveWallCollisions(Player *p, const Level *lvl)
-{
-    // Algumas passadas: empurrar para fora de uma parede pode jogar contra outra
-    for (int pass = 0; pass < 4; pass++)
-    {
-        Vector2 pos = p->playerPosition;
-
-        int colStart = (int)floorf((pos.x - p->radius) / TILE_SIZE);
-        int colEnd = (int)floorf((pos.x + p->radius) / TILE_SIZE);
-        int rowStart = (int)floorf((pos.y - p->radius) / TILE_SIZE);
-        int rowEnd = (int)floorf((pos.y + p->radius) / TILE_SIZE);
-
-        bool found = false;
-        float bestDist = p->radius;
-        Vector2 bestPush = {0.0f, 0.0f};
-
-        for (int row = rowStart; row <= rowEnd; row++)
-        {
-            for (int col = colStart; col <= colEnd; col++)
-            {
-                if (!IsWallTile(lvl, row, col))
-                    continue;
-
-                Rectangle wall = {col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE};
-
-                Vector2 closest = {
-                    Clamp(pos.x, wall.x, wall.x + wall.width),
-                    Clamp(pos.y, wall.y, wall.y + wall.height)};
-
-                Vector2 diff = Vector2Subtract(pos, closest);
-                float dist = Vector2Length(diff);
-
-                if (dist >= p->radius)
-                    continue;
-
-                Vector2 push;
-
-                if (dist > 0.0001f)
-                {
-                    // Empurra ao longo da normal até o círculo só encostar
-                    push = Vector2Scale(diff, (p->radius - dist) / dist);
-                }
-                else
-                {
-                    // Centro dentro do tile: sai pela face mais próxima
-                    float dl = pos.x - wall.x;
-                    float dr = wall.x + wall.width - pos.x;
-                    float dt = pos.y - wall.y;
-                    float db = wall.y + wall.height - pos.y;
-                    float m = fminf(fminf(dl, dr), fminf(dt, db));
-
-                    if (m == dl)
-                        push = (Vector2){-(dl + p->radius), 0.0f};
-                    else if (m == dr)
-                        push = (Vector2){dr + p->radius, 0.0f};
-                    else if (m == dt)
-                        push = (Vector2){0.0f, -(dt + p->radius)};
-                    else
-                        push = (Vector2){0.0f, db + p->radius};
-                }
-
-                // Resolve só a penetração mais profunda por passada.
-                // Evita "colisões fantasma" na junção entre dois tiles alinhados.
-                if (!found || dist < bestDist)
-                {
-                    found = true;
-                    bestDist = dist;
-                    bestPush = push;
-                }
-            }
-        }
-
-        if (!found)
-            break;
-
-        p->playerPosition = Vector2Add(p->playerPosition, bestPush);
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// FUNÇÕES DE INICIO
-void InitPlayer(Player *p, Vector2 position)
-{
-    p->playerPosition = position;
-    p->radius = 15.0f;
-    p->speed = 200.0f;
-    p->isHoldingBlock = false;
-    p->carryingBlock = NULL;
-}
-
-// ---------------------------------------------------------------------------------------------
-// FUNÇÕES DE ATUALIZAÇÃO
-void UpdatePlayer(Player *p, Level *lvl)
-{
-    Vector2 direction = {0.0f, 0.0f};
-
-    if (IsKeyDown(KEY_W))
-        direction.y -= 1.0f;
-    if (IsKeyDown(KEY_S))
-        direction.y += 1.0f;
-    if (IsKeyDown(KEY_D))
-        direction.x += 1.0f;
-    if (IsKeyDown(KEY_A))
-        direction.x -= 1.0f;
-
-    if (Vector2Length(direction) > 0.0f)
-    {
-        direction = Vector2Normalize(direction);
-
-        float dt = GetFrameTime();
-        p->playerPosition.x += direction.x * p->speed * dt;
-        p->playerPosition.y += direction.y * p->speed * dt;
-    }
-
-    // Sempre resolve, mesmo parado (ex.: spawn encostado em parede)
-    ResolveWallCollisions(p, lvl);
 }
 
 // Libera o slot ocupado por um bloco (se ele estiver encaixado em algum)
@@ -380,12 +170,6 @@ void PickUpOrReleaseBlock(Player *p, Level *lvl)
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// FUNÇÕES DRAW
-void DrawPlayer(const Player *p)
-{
-    DrawCircle((int)p->playerPosition.x, (int)p->playerPosition.y, p->radius, RED);
-}
 
 void DrawMemBlock(const Level *lvl)
 {
