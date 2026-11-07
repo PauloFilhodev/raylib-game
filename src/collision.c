@@ -1,6 +1,8 @@
 #include "raylib.h"
 #include "raymath.h"
 
+#include <math.h>
+
 #include "collision.h"
 
 // Fora do mapa conta como parede

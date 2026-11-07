@@ -1,14 +1,31 @@
 #include "raylib.h"
 #include "raymath.h"
-#include "game_types.h"
-#include <math.h>
+
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 
-#include "player.c"
+#include "game_types.h"
+#include "levels.h"
+#include "player.h"
 
-#define WINDOW_WIDTH 1280
-#define WINDOW_HEIGHT 720
+#define WINDOW_WIDTH (MAP_COLS * TILE_SIZE)  // 1280
+#define WINDOW_HEIGHT (MAP_ROWS * TILE_SIZE) // 720
+
+typedef enum
+{
+    STATE_PLAYING,
+    STATE_GAMEOVER,
+    STATE_WIN,
+    STATE_ERROR
+} GameState;
+
+static const char *LevelPath(int number)
+{
+    static char path[64];
+    snprintf(path, sizeof path, "levels/level%d.txt", number);
+    return path;
+}
 
 static Vector2 SlotCenter(const MemorySlot *slot)
 {
@@ -20,50 +37,20 @@ static Vector2 SlotCenter(const MemorySlot *slot)
 // ---------------------------------------------------------------------------------------------
 // CARREGAMENTO DO LEVEL
 
-void LoadLevel(Level *lvl, const char *map_name, int levelNumber, Player *p)
+static bool StartLevel(int number, Level *lvl, Player *p, float *timeLeft)
 {
-    lvl->levelNumber = levelNumber;
-    lvl->levelName = map_name;
+    if (!LoadLevel(LevelPath(number), lvl))
+        return false;
 
-    for (int linha = 0; linha < MAP_ROWS; linha++)
-    {
-        for (int coluna = 0; coluna < MAP_COLS; coluna++)
-        {
-            int x = coluna * TILE_SIZE;
-            int y = linha * TILE_SIZE;
+    lvl->levelNumber = number;
+    InitPlayer(p, lvl->spawnPlayer);
+    *timeLeft = lvl->timeLimit;
 
-            if (lvl->tileMap[linha][coluna] == TILE_SPAWN_PLAYER)
-            {
-                lvl->spawnPlayer = (Vector2){
-                    x + TILE_SIZE / 2.0f,
-                    y + TILE_SIZE / 2.0f};
-
-                p->playerPosition = lvl->spawnPlayer;
-            }
-        }
-    }
-
-    // SLOTS
-    for (int i = 0; i < lvl->blockSlots; i++)
-    {
-        MemorySlot *s = &lvl->memorySlot[i];
-
-        s->pixelPosition = (Vector2){s->gridX * TILE_SIZE, s->gridY * TILE_SIZE};
-        s->spawnPosition = s->pixelPosition;
-        s->hitbox = (Rectangle){s->pixelPosition.x, s->pixelPosition.y, TILE_SIZE, TILE_SIZE};
-    }
-
-    // BLOCOS DE MEMÓRIA
-    for (int i = 0; i < lvl->blockCount; i++)
-    {
-        MemoryBlock *m = &lvl->memoryBlock[i];
-
-        m->pixelPosition = (Vector2){
-            m->gridX * TILE_SIZE + (TILE_SIZE / 2.0f),
-            m->gridY * TILE_SIZE + (TILE_SIZE / 2.0f)};
-        m->spawnPosition = m->pixelPosition;
-    }
+    return true;
 }
+
+// ---------------------------------------------------------------------------------------------
+// BLOCOS E SLOTS
 
 // Libera o slot ocupado por um bloco (se ele estiver encaixado em algum)
 static void ReleaseSlotOfBlock(MemoryBlock *block, Level *lvl)
@@ -87,7 +74,7 @@ static void ReleaseSlotOfBlock(MemoryBlock *block, Level *lvl)
 }
 
 // Tenta encaixar o bloco em um slot livre próximo E com o mesmo valor
-void FitMemoryBlock(MemoryBlock *block, Level *lvl)
+static void FitMemoryBlock(MemoryBlock *block, Level *lvl)
 {
     for (int i = 0; i < lvl->blockSlots; i++)
     {
@@ -112,9 +99,10 @@ void FitMemoryBlock(MemoryBlock *block, Level *lvl)
     }
 }
 
-void PickUpOrReleaseBlock(Player *p, Level *lvl)
+static void PickUpOrReleaseBlock(Player *p, Level *lvl)
 {
-    if (IsKeyPressed(KEY_SPACE))
+    // Atordoado: não consegue pegar nem soltar
+    if (p->stunTimer <= 0.0f && IsKeyPressed(KEY_SPACE))
     {
         if (p->isHoldingBlock)
         {
@@ -170,18 +158,26 @@ void PickUpOrReleaseBlock(Player *p, Level *lvl)
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// DESENHO
 
-void DrawMemBlock(const Level *lvl)
+static void DrawMemBlock(const Level *lvl)
 {
     for (int i = 0; i < lvl->blockCount; i++)
     {
         const MemoryBlock *m = &lvl->memoryBlock[i];
-        DrawCircle((int)m->pixelPosition.x, (int)m->pixelPosition.y, m->radius, m->blockColor);
-        DrawCircleLines((int)m->pixelPosition.x, (int)m->pixelPosition.y, m->radius, BLACK);
+        int x = (int)m->pixelPosition.x;
+        int y = (int)m->pixelPosition.y;
+
+        DrawCircle(x, y, m->radius, m->blockColor);
+        DrawCircleLines(x, y, m->radius, BLACK);
+
+        const char *txt = TextFormat("%d", m->blockValue);
+        DrawText(txt, x - MeasureText(txt, 16) / 2, y - 8, 16, WHITE);
     }
 }
 
-void DrawMemSlot(const Level *lvl)
+static void DrawMemSlot(const Level *lvl)
 {
     for (int i = 0; i < lvl->blockSlots; i++)
     {
@@ -189,125 +185,141 @@ void DrawMemSlot(const Level *lvl)
         int x = (int)s->pixelPosition.x;
         int y = (int)s->pixelPosition.y;
 
-        // Retângulo primeiro, texto depois (antes o texto ficava escondido)
-        DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, Fade(s->slotColor, 0.6f));
+        // Retângulo primeiro, texto depois
+        DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, Fade(s->slotColor, s->isFilled ? 0.9f : 0.6f));
         DrawRectangleLines(x, y, TILE_SIZE, TILE_SIZE, WHITE);
         DrawText(TextFormat("%d", s->slotValue), x + 4, y + 2, 16, WHITE);
-        DrawText(TextFormat("%d", s->isFilled), x + 4, y - 18, 16, BLACK);
     }
 }
 
-void DrawLevel(const Level *lvl)
+static void DrawCenteredText(const char *text, int y, int size, Color color)
 {
-    for (int linha = 0; linha < MAP_ROWS; linha++)
-    {
-        for (int coluna = 0; coluna < MAP_COLS; coluna++)
-        {
-            int x = coluna * TILE_SIZE;
-            int y = linha * TILE_SIZE;
+    DrawText(text, (WINDOW_WIDTH - MeasureText(text, size)) / 2, y, size, color);
+}
 
-            switch (lvl->tileMap[linha][coluna])
-            {
-            case TILE_FLOOR:
-                DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, (Color){46, 70, 89, 255});
-                break;
-            case TILE_WALL:
-                DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, BLACK);
-                break;
-            case TILE_SPAWN_PLAYER:
-                DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, GRAY);
-                break;
-            case TILE_SPAWN_BLOCK:
-                DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, GREEN);
-                break;
-            case TILE_SLOT_RAM:
-                DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, PURPLE);
-                break;
-            default:
-                DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, GOLD);
-                break;
-            }
+// Obs.: a fonte padrão da raylib não tem acentos, por isso os textos da tela são sem acento.
+static void DrawHUD(const Level *lvl, const Player *p, float timeLeft)
+{
+    // Linha de cima (parede)
+    DrawText(TextFormat("Fase %d - %s", lvl->levelNumber, lvl->levelName), 12, 10, 20, WHITE);
+    DrawText(TextFormat("Slots: %d/%d", CountFilledSlots(lvl), lvl->blockSlots), 520, 10, 20, WHITE);
+    DrawText(TextFormat("Tempo: %.1f", timeLeft), 1090, 10, 20, timeLeft <= 10.0f ? RED : WHITE);
 
-            DrawRectangleLines(x, y, TILE_SIZE, TILE_SIZE, BLACK);
-        }
-    }
+    // Linha de baixo (parede)
+    int y = WINDOW_HEIGHT - 30;
+
+    if (p->stunTimer > 0.0f)
+        DrawText(TextFormat("ATORDOADO! %.1fs", p->stunTimer), 12, y, 20, YELLOW);
+    if (p->reverseTimer > 0.0f)
+        DrawText(TextFormat("CONTROLES INVERTIDOS! %.1fs", p->reverseTimer), 260, y, 20, MAGENTA);
+
+    DrawText("WASD: mover | ESPACO: pegar/soltar", 840, y, 20, LIGHTGRAY);
 }
 
 // ---------------------------------------------------------------------------------------------
 
 int main(void)
 {
-    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Byte Delivery");
+    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Byte Bound");
     SetTargetFPS(60);
 
-    // DECLARAÇÃO DE VARIÁVEIS
     Player player = {0};
-    Level level0 = {
-        .levelNumber = 1,
-        .blockCount = 3,
-        .blockSlots = 3,
-        .levelName = "Fase 1 - Tutorial",
-        .timeLimit = 60.0f,
-        .tileMap = {
-            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
-            {1, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1},
-            {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 4, 1},
-            {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
-        // Blocos espalhados (antes os 3 nasciam empilhados no mesmo tile)
-        .memoryBlock = {
-            {.isPlaced = false, .isCarried = false, .gridX = 18, .gridY = 5, .blockValue = 1, .blockColor = PURPLE, .radius = 15.0f},
-            {.isPlaced = false, .isCarried = false, .gridX = 21, .gridY = 5, .blockValue = 2, .blockColor = RED, .radius = 25.0f},
-            {.isPlaced = false, .isCarried = false, .gridX = 25, .gridY = 5, .blockValue = 3, .blockColor = BLUE, .radius = 35.0f},
-        },
-        // Cor de cada slot = cor do bloco com o mesmo valor
-        .memorySlot = {
-            {.gridX = 16, .gridY = 1, .isFilled = false, .slotValue = 1, .slotColor = PURPLE},
-            {.gridX = 16, .gridY = 5, .isFilled = false, .slotValue = 2, .slotColor = RED},
-            {.gridX = 16, .gridY = 10, .isFilled = false, .slotValue = 3, .slotColor = BLUE},
-        }};
+    Level level = {0};
+    int currentLevel = 1;
+    float timeLeft = 0.0f;
+    GameState state = STATE_PLAYING;
+    const char *endReason = "";
+    bool hasNextLevel = false;
 
-    // INICIALIZAÇÃO DE VARIÁVEIS
-    InitPlayer(&player, (Vector2){0, 0});
-    LoadLevel(&level0, "Fase 1", 1, &player);
+    if (!StartLevel(currentLevel, &level, &player, &timeLeft))
+        state = STATE_ERROR;
 
     while (!WindowShouldClose())
     {
+        float dt = GetFrameTime();
+
         // ATUALIZAÇÕES DO JOGO
-        UpdatePlayer(&player, &level0);
-        PickUpOrReleaseBlock(&player, &level0);
+        switch (state)
+        {
+        case STATE_PLAYING:
+            timeLeft -= dt;
+
+            UpdatePlayer(&player, &level, dt);
+            UpdateEnemies(&level, dt);
+            PickUpOrReleaseBlock(&player, &level);
+
+            if (CheckEnemyCollisions(&player, &level))
+            {
+                endReason = "VIRUS DETECTADO! Voce foi infectado.";
+                state = STATE_GAMEOVER;
+            }
+            else if (timeLeft <= 0.0f)
+            {
+                timeLeft = 0.0f;
+                endReason = "SYSTEM FREEZE! O tempo acabou.";
+                state = STATE_GAMEOVER;
+            }
+            else if (CountFilledSlots(&level) == level.blockSlots)
+            {
+                hasNextLevel = FileExists(LevelPath(currentLevel + 1));
+                state = STATE_WIN;
+            }
+            break;
+
+        case STATE_GAMEOVER:
+            if (IsKeyPressed(KEY_R))
+                state = StartLevel(currentLevel, &level, &player, &timeLeft) ? STATE_PLAYING : STATE_ERROR;
+            break;
+
+        case STATE_WIN:
+            if (hasNextLevel && IsKeyPressed(KEY_ENTER))
+            {
+                currentLevel++;
+                state = StartLevel(currentLevel, &level, &player, &timeLeft) ? STATE_PLAYING : STATE_ERROR;
+            }
+            break;
+
+        case STATE_ERROR:
+            break;
+        }
 
         // RENDERIZAÇÃO DO JOGO
         BeginDrawing();
+        ClearBackground(BLACK);
 
-        ClearBackground(RAYWHITE);
-        // FUNÇÕES DRAW
-        DrawLevel(&level0);
-        DrawMemSlot(&level0);
-        DrawMemBlock(&level0);
-        DrawPlayer(&player);
-        // INTERFACE
-        DrawText(level0.levelName, 0, 0, 20, RED);
-        if (player.isHoldingBlock)
+        if (state == STATE_ERROR)
         {
-            DrawText("Block is being carried", 0, 20, 20, RED);
+            DrawCenteredText("ERRO AO CARREGAR A FASE", 270, 40, RED);
+            DrawCenteredText(TextFormat("Arquivo: %s", LevelPath(currentLevel)), 340, 24, WHITE);
+            DrawCenteredText("Veja o terminal para saber a linha do erro.", 380, 20, LIGHTGRAY);
+            DrawCenteredText("Rode o jogo a partir da pasta que contem 'levels/'.", 410, 20, LIGHTGRAY);
         }
         else
         {
-            DrawText("Block is not being carried", 0, 20, 20, RED);
+            DrawLevel(&level);
+            DrawMemSlot(&level);
+            DrawEnemies(&level);
+            DrawPlayer(&player);
+            DrawMemBlock(&level); // depois do player: o bloco carregado fica visível
+            DrawHUD(&level, &player, timeLeft);
+
+            if (state == STATE_GAMEOVER)
+            {
+                DrawRectangle(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, Fade(BLACK, 0.7f));
+                DrawCenteredText("GAME OVER", 260, 60, RED);
+                DrawCenteredText(endReason, 340, 24, WHITE);
+                DrawCenteredText("Pressione R para tentar de novo", 390, 20, LIGHTGRAY);
+            }
+            else if (state == STATE_WIN)
+            {
+                DrawRectangle(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, Fade(BLACK, 0.7f));
+                DrawCenteredText("FASE CONCLUIDA!", 260, 60, GREEN);
+                DrawCenteredText(TextFormat("Tempo restante: %.1fs", timeLeft), 340, 24, WHITE);
+                if (hasNextLevel)
+                    DrawCenteredText("Pressione ENTER para a proxima fase", 390, 20, LIGHTGRAY);
+                else
+                    DrawCenteredText("Voce terminou todas as fases! (ESC para sair)", 390, 20, LIGHTGRAY);
+            }
         }
 
         EndDrawing();
