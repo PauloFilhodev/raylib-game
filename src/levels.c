@@ -6,6 +6,10 @@
 #include <string.h>
 
 #include "levels.h"
+#include "assets.h"
+
+// Tamanho do sprite em pixels (a imagem original tem 40x40)
+#define ENEMY_SPRITE_SIZE 56.0f
 
 static Vector2 TileToPixel(int col, int row)
 {
@@ -420,7 +424,20 @@ void DrawEnemies(const Level *lvl)
     for (int i = 0; i < lvl->enemyCount; i++)
     {
         const Enemy *e = &lvl->enemy[i];
+        Texture2D t = gAssets.enemy[e->type]; // ENEMY_KILL/STUN/REVERSE = 0/1/2
 
+        if (t.id != 0)
+        {
+            float size = ENEMY_SPRITE_SIZE; // so o desenho; a hitbox continua com e->half
+            Rectangle src = {0, 0, (float)t.width, (float)t.height};
+            Rectangle dst = {e->pos.x, e->pos.y, size, size};
+            Vector2 origin = {size / 2.0f, size / 2.0f};
+
+            DrawTexturePro(t, src, dst, origin, 0.0f, WHITE);
+            continue;
+        }
+
+        // Sem textura: quadrado colorido como antes
         Color c = RED;
         const char *label = "K";
 

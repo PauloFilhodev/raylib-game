@@ -8,6 +8,8 @@
 #include "game_types.h"
 #include "levels.h"
 #include "player.h"
+#include "blocks.h"
+#include "assets.h"
 
 #define WINDOW_WIDTH (MAP_COLS * TILE_SIZE)  // 1280
 #define WINDOW_HEIGHT (MAP_ROWS * TILE_SIZE) // 720
@@ -20,18 +22,41 @@ typedef enum
     STATE_ERROR
 } GameState;
 
+// Procura a pasta que contem "levels/" (cwd, pasta do exe e pastas acima) e entra nela.
+// Assim o jogo funciona rodando de src/, de src/output/ ou clicando no .exe.
+static void FindGameFolder(void)
+{
+    const char *bases[] = {"", "../", "../../", NULL};
+
+    for (int i = 0; bases[i]; i++)
+    {
+        if (DirectoryExists(TextFormat("%slevels", bases[i])))
+        {
+            if (i > 0)
+                ChangeDirectory(bases[i]);
+            return;
+        }
+    }
+
+    const char *app = GetApplicationDirectory();
+    const char *rel[] = {"", "../", "../../"};
+
+    for (int i = 0; i < 3; i++)
+    {
+        const char *dir = TextFormat("%s%slevels", app, rel[i]);
+        if (DirectoryExists(dir))
+        {
+            ChangeDirectory(TextFormat("%s%s", app, rel[i]));
+            return;
+        }
+    }
+}
+
 static const char *LevelPath(int number)
 {
     static char path[64];
     snprintf(path, sizeof path, "levels/level%d.txt", number);
     return path;
-}
-
-static Vector2 SlotCenter(const MemorySlot *slot)
-{
-    return (Vector2){
-        slot->pixelPosition.x + TILE_SIZE / 2.0f,
-        slot->pixelPosition.y + TILE_SIZE / 2.0f};
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -50,147 +75,7 @@ static bool StartLevel(int number, Level *lvl, Player *p, float *timeLeft)
 }
 
 // ---------------------------------------------------------------------------------------------
-// BLOCOS E SLOTS
-
-// Libera o slot ocupado por um bloco (se ele estiver encaixado em algum)
-static void ReleaseSlotOfBlock(MemoryBlock *block, Level *lvl)
-{
-    if (!block->isPlaced)
-        return;
-
-    for (int i = 0; i < lvl->blockSlots; i++)
-    {
-        MemorySlot *slot = &lvl->memorySlot[i];
-
-        if (slot->isFilled &&
-            Vector2Distance(block->pixelPosition, SlotCenter(slot)) < 1.0f)
-        {
-            slot->isFilled = false;
-            break;
-        }
-    }
-
-    block->isPlaced = false;
-}
-
-// Tenta encaixar o bloco em um slot livre próximo E com o mesmo valor
-static void FitMemoryBlock(MemoryBlock *block, Level *lvl)
-{
-    for (int i = 0; i < lvl->blockSlots; i++)
-    {
-        MemorySlot *slot = &lvl->memorySlot[i];
-
-        if (slot->isFilled)
-            continue;
-
-        if (slot->slotValue != block->blockValue)
-            continue;
-
-        Vector2 slotCenter = SlotCenter(slot);
-
-        if (Vector2Distance(block->pixelPosition, slotCenter) <= TILE_SIZE)
-        {
-            block->pixelPosition = slotCenter;
-            block->isPlaced = true;
-            slot->isFilled = true;
-
-            return;
-        }
-    }
-}
-
-static void PickUpOrReleaseBlock(Player *p, Level *lvl)
-{
-    // Atordoado: não consegue pegar nem soltar
-    if (p->stunTimer <= 0.0f && IsKeyPressed(KEY_SPACE))
-    {
-        if (p->isHoldingBlock)
-        {
-            // SOLTAR
-            MemoryBlock *block = p->carryingBlock;
-
-            block->pixelPosition = p->playerPosition;
-            block->isCarried = false;
-
-            FitMemoryBlock(block, lvl);
-
-            p->carryingBlock = NULL;
-            p->isHoldingBlock = false;
-        }
-        else
-        {
-            // PEGAR: escolhe o bloco mais próximo ao alcance
-            MemoryBlock *nearest = NULL;
-            float nearestDist = 0.0f;
-
-            for (int i = 0; i < lvl->blockCount; i++)
-            {
-                MemoryBlock *b = &lvl->memoryBlock[i];
-
-                if (b->isCarried)
-                    continue;
-
-                float distance = Vector2Distance(p->playerPosition, b->pixelPosition);
-
-                if (distance <= p->radius + b->radius &&
-                    (nearest == NULL || distance < nearestDist))
-                {
-                    nearest = b;
-                    nearestDist = distance;
-                }
-            }
-
-            if (nearest != NULL)
-            {
-                ReleaseSlotOfBlock(nearest, lvl);
-
-                nearest->isCarried = true;
-                p->carryingBlock = nearest;
-                p->isHoldingBlock = true;
-            }
-        }
-    }
-
-    if (p->isHoldingBlock)
-    {
-        p->carryingBlock->pixelPosition.x = p->playerPosition.x;
-        p->carryingBlock->pixelPosition.y = p->playerPosition.y - 15.0f;
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
 // DESENHO
-
-static void DrawMemBlock(const Level *lvl)
-{
-    for (int i = 0; i < lvl->blockCount; i++)
-    {
-        const MemoryBlock *m = &lvl->memoryBlock[i];
-        int x = (int)m->pixelPosition.x;
-        int y = (int)m->pixelPosition.y;
-
-        DrawCircle(x, y, m->radius, m->blockColor);
-        DrawCircleLines(x, y, m->radius, BLACK);
-
-        const char *txt = TextFormat("%d", m->blockValue);
-        DrawText(txt, x - MeasureText(txt, 16) / 2, y - 8, 16, WHITE);
-    }
-}
-
-static void DrawMemSlot(const Level *lvl)
-{
-    for (int i = 0; i < lvl->blockSlots; i++)
-    {
-        const MemorySlot *s = &lvl->memorySlot[i];
-        int x = (int)s->pixelPosition.x;
-        int y = (int)s->pixelPosition.y;
-
-        // Retângulo primeiro, texto depois
-        DrawRectangle(x, y, TILE_SIZE, TILE_SIZE, Fade(s->slotColor, s->isFilled ? 0.9f : 0.6f));
-        DrawRectangleLines(x, y, TILE_SIZE, TILE_SIZE, WHITE);
-        DrawText(TextFormat("%d", s->slotValue), x + 4, y + 2, 16, WHITE);
-    }
-}
 
 static void DrawCenteredText(const char *text, int y, int size, Color color)
 {
@@ -222,6 +107,9 @@ int main(void)
 {
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Byte Bound");
     SetTargetFPS(60);
+
+    FindGameFolder(); // garante que "levels/" e "assets/" sejam achados
+    LoadAssets();     // texturas (precisa da janela aberta)
 
     Player player = {0};
     Level level = {0};
@@ -297,10 +185,10 @@ int main(void)
         else
         {
             DrawLevel(&level);
-            DrawMemSlot(&level);
+            DrawMemSlots(&level);
             DrawEnemies(&level);
             DrawPlayer(&player);
-            DrawMemBlock(&level); // depois do player: o bloco carregado fica visível
+            DrawMemBlocks(&level); // depois do player: o bloco carregado fica visível
             DrawHUD(&level, &player, timeLeft);
 
             if (state == STATE_GAMEOVER)
@@ -325,6 +213,7 @@ int main(void)
         EndDrawing();
     }
 
+    UnloadAssets();
     CloseWindow();
 
     return 0;

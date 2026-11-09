@@ -5,12 +5,16 @@
 
 #include "player.h"
 #include "collision.h"
+#include "assets.h"
 
 // Duração dos efeitos (segundos)
 #define STUN_TIME 1.5f
 #define STUN_IMMUNITY 2.5f // tempo sem sofrer stun/reverse de novo após ser atordoado
 #define REVERSE_TIME 4.0f
 #define REVERSE_IMMUNITY 2.0f
+
+// Tamanho do sprite em pixels (a imagem original tem 40x40)
+#define PLAYER_SPRITE_SIZE 56.0f
 
 void InitPlayer(Player *p, Vector2 position)
 {
@@ -113,10 +117,24 @@ void DrawPlayer(const Player *p)
     else if (p->reverseTimer > 0.0f)
         color = MAGENTA;
 
-    // Pisca (fica mais transparente) enquanto está imune
+    // Pisca (fica mais transparente) enquanto esta imune
     if (p->immuneTimer > 0.0f && ((int)(p->immuneTimer * 10.0f) % 2 == 0))
         color = Fade(color, 0.35f);
 
-    DrawCircle((int)p->playerPosition.x, (int)p->playerPosition.y, p->radius, color);
-    DrawCircleLines((int)p->playerPosition.x, (int)p->playerPosition.y, p->radius, BLACK);
+    Texture2D t = gAssets.player;
+
+    if (t.id == 0)
+    {
+        // Sem textura: circulo como antes
+        DrawCircle((int)p->playerPosition.x, (int)p->playerPosition.y, p->radius, color);
+        DrawCircleLines((int)p->playerPosition.x, (int)p->playerPosition.y, p->radius, BLACK);
+        return;
+    }
+
+    float size = PLAYER_SPRITE_SIZE; // so o desenho; a hitbox continua com p->radius
+    Rectangle src = {0, 0, (float)t.width, (float)t.height};
+    Rectangle dst = {p->playerPosition.x, p->playerPosition.y, size, size};
+    Vector2 origin = {size / 2.0f, size / 2.0f};
+
+    DrawTexturePro(t, src, dst, origin, 0.0f, color);
 }
